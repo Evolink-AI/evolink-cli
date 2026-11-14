@@ -1,0 +1,445 @@
+{
+  "meta": {
+    "schema_version": "2",
+    "catalog_version": "cat_009e288dd431f383efd28f0b",
+    "pricing_version": "prc_dba82bbe7bf335cdd3863d31",
+    "price_scope": "public_default",
+    "currency": "USD",
+    "exchange_rate_version": "pricing-fx/v1:USD-CNY=6.8",
+    "updated_at": "2026-11-13T19:02:13.202Z",
+    "fresh_until": "2026-11-14T10:14:00Z"
+  },
+  "model": {
+    "model_id": "gemini-3.5-flash-lite",
+    "product_id": "gemini-3.5-flash-lite",
+    "operation": "text_generation",
+    "modality": "text",
+    "lifecycle": "active",
+    "pricing_status": "available",
+    "settlement_basis": "actual_usage",
+    "policy_version": 0,
+    "policy_checksum": "e7f6214bca353a047d4ebc64bff002e8bbd1df76e1287978c9600cef2b7ef620",
+    "policy_source": "legacy_text_adapter",
+    "aliases": [
+      "gemini-2.5-flash"
+    ],
+    "parameters": [
+      {
+        "name": "prompt_tokens",
+        "type": "integer",
+        "minimum": "0",
+        "default": "0"
+      }
+    ],
+    "components": [
+      {
+        "id": "audio_input",
+        "role": "audio_input",
+        "dimension": "audio_input_token",
+        "sku_id": "5019",
+        "unit": "1k_tokens",
+        "billing_unit_size": 1000,
+        "display_unit_size": 1000000,
+        "rate": {
+          "uc": "184",
+          "credits": "0.0184",
+          "cny": "0.00184",
+          "usd": "0.00027059"
+        },
+        "minimum_charge": {
+          "uc": "20",
+          "credits": "0.002",
+          "cny": "0.0002",
+          "usd": "0.00002941"
+        },
+        "billing_rule": "per_token",
+        "pricing_status": "available",
+        "effective_at": "2026-11-13T19:02:13.202Z",
+        "quantity_rule": {
+          "op": "divide",
+          "args": [
+            {
+              "op": "variable",
+              "name": "audio_input_tokens"
+            },
+            {
+              "op": "constant",
+              "value": "1000"
+            }
+          ]
+        },
+        "rounding": {
+          "point": "per_component_subtotal",
+          "mode": "ceil"
+        },
+        "tiers": [
+          {
+            "when": {
+              "op": "gt",
+              "args": [
+                {
+                  "op": "variable",
+                  "name": "prompt_tokens"
+                },
+                {
+                  "op": "constant",
+                  "value": "200000"
+                }
+              ]
+            },
+            "multiplier": "1",
+            "sku_id": "5019",
+            "rate": {
+              "uc": "184",
+              "credits": "0.0184",
+              "cny": "0.00184",
+              "usd": "0.00027059"
+            },
+            "minimum_charge": {
+              "uc": "20",
+              "credits": "0.002",
+              "cny": "0.0002",
+              "usd": "0.00002941"
+            },
+            "billing_rule": "per_token",
+            "pricing_status": "available",
+            "effective_at": "2026-11-13T19:02:13.202Z"
+          }
+        ]
+      },
+      {
+        "id": "cache_hit",
+        "role": "cache_hit",
+        "dimension": "cache_read_token",
+        "sku_id": "5018",
+        "unit": "1k_tokens",
+        "billing_unit_size": 1000,
+        "display_unit_size": 1000000,
+        "rate": {
+          "uc": "19",
+          "credits": "0.0019",
+          "cny": "0.00019",
+          "usd": "0.00002794"
+        },
+        "minimum_charge": {
+          "uc": "15",
+          "credits": "0.0015",
+          "cny": "0.00015",
+          "usd": "0.00002206"
+        },
+        "billing_rule": "per_token",
+        "pricing_status": "available",
+        "effective_at": "2026-11-13T19:02:13.202Z",
+        "quantity_rule": {
+          "op": "divide",
+          "args": [
+            {
+              "op": "variable",
+              "name": "cache_read_tokens"
+            },
+            {
+              "op": "constant",
+              "value": "1000"
+            }
+          ]
+        },
+        "rounding": {
+          "point": "per_component_subtotal",
+          "mode": "ceil"
+        },
+        "tiers": [
+          {
+            "when": {
+              "op": "gt",
+              "args": [
+                {
+                  "op": "variable",
+                  "name": "prompt_tokens"
+                },
+                {
+                  "op": "constant",
+                  "value": "200000"
+                }
+              ]
+            },
+            "multiplier": "1",
+            "sku_id": "5018",
+            "rate": {
+              "uc": "19",
+              "credits": "0.0019",
+              "cny": "0.00019",
+              "usd": "0.00002794"
+            },
+            "minimum_charge": {
+              "uc": "15",
+              "credits": "0.0015",
+              "cny": "0.00015",
+              "usd": "0.00002206"
+            },
+            "billing_rule": "per_token",
+            "pricing_status": "available",
+            "effective_at": "2026-11-13T19:02:13.202Z"
+          }
+        ]
+      },
+      {
+        "id": "cache_write",
+        "role": "cache_write",
+        "dimension": "cache_write_token",
+        "sku_id": "5017",
+        "unit": "1k_tokens",
+        "billing_unit_size": 1000,
+        "display_unit_size": 1000000,
+        "rate": {
+          "uc": "184",
+          "credits": "0.0184",
+          "cny": "0.00184",
+          "usd": "0.00027059"
+        },
+        "minimum_charge": {
+          "uc": "10",
+          "credits": "0.001",
+          "cny": "0.0001",
+          "usd": "0.00001471"
+        },
+        "billing_rule": "per_token",
+        "pricing_status": "available",
+        "effective_at": "2026-11-13T19:02:13.202Z",
+        "quantity_rule": {
+          "op": "divide",
+          "args": [
+            {
+              "op": "variable",
+              "name": "cache_write_tokens"
+            },
+            {
+              "op": "constant",
+              "value": "1000"
+            }
+          ]
+        },
+        "rounding": {
+          "point": "per_component_subtotal",
+          "mode": "ceil"
+        },
+        "tiers": [
+          {
+            "when": {
+              "op": "gt",
+              "args": [
+                {
+                  "op": "variable",
+                  "name": "prompt_tokens"
+                },
+                {
+                  "op": "constant",
+                  "value": "200000"
+                }
+              ]
+            },
+            "multiplier": "1",
+            "sku_id": "5017",
+            "rate": {
+              "uc": "184",
+              "credits": "0.0184",
+              "cny": "0.00184",
+              "usd": "0.00027059"
+            },
+            "minimum_charge": {
+              "uc": "10",
+              "credits": "0.001",
+              "cny": "0.0001",
+              "usd": "0.00001471"
+            },
+            "billing_rule": "per_token",
+            "pricing_status": "available",
+            "effective_at": "2026-11-13T19:02:13.202Z"
+          }
+        ]
+      },
+      {
+        "id": "google_search",
+        "role": "google_search",
+        "dimension": "search",
+        "sku_id": "2345",
+        "unit": "search",
+        "billing_unit_size": 1,
+        "display_unit_size": 1,
+        "rate": {
+          "uc": "9520",
+          "credits": "0.952",
+          "cny": "0.0952",
+          "usd": "0.014"
+        },
+        "minimum_charge": {
+          "uc": "5000",
+          "credits": "0.5",
+          "cny": "0.05",
+          "usd": "0.00735294"
+        },
+        "billing_rule": "per_call",
+        "pricing_status": "available",
+        "effective_at": "2026-11-13T19:02:13.202Z",
+        "quantity_rule": {
+          "op": "variable",
+          "name": "search_count"
+        },
+        "rounding": {
+          "point": "per_component_subtotal",
+          "mode": "ceil"
+        },
+        "tiers": []
+      },
+      {
+        "id": "input",
+        "role": "input",
+        "dimension": "input_token",
+        "sku_id": "5015",
+        "unit": "1k_tokens",
+        "billing_unit_size": 1000,
+        "display_unit_size": 1000000,
+        "rate": {
+          "uc": "184",
+          "credits": "0.0184",
+          "cny": "0.00184",
+          "usd": "0.00027059"
+        },
+        "minimum_charge": {
+          "uc": "100",
+          "credits": "0.01",
+          "cny": "0.001",
+          "usd": "0.00014706"
+        },
+        "billing_rule": "per_token",
+        "pricing_status": "available",
+        "effective_at": "2026-11-13T19:02:13.202Z",
+        "quantity_rule": {
+          "op": "divide",
+          "args": [
+            {
+              "op": "variable",
+              "name": "input_tokens"
+            },
+            {
+              "op": "constant",
+              "value": "1000"
+            }
+          ]
+        },
+        "rounding": {
+          "point": "per_component_subtotal",
+          "mode": "ceil"
+        },
+        "tiers": [
+          {
+            "when": {
+              "op": "gt",
+              "args": [
+                {
+                  "op": "variable",
+                  "name": "prompt_tokens"
+                },
+                {
+                  "op": "constant",
+                  "value": "200000"
+                }
+              ]
+            },
+            "multiplier": "1",
+            "sku_id": "5015",
+            "rate": {
+              "uc": "184",
+              "credits": "0.0184",
+              "cny": "0.00184",
+              "usd": "0.00027059"
+            },
+            "minimum_charge": {
+              "uc": "100",
+              "credits": "0.01",
+              "cny": "0.001",
+              "usd": "0.00014706"
+            },
+            "billing_rule": "per_token",
+            "pricing_status": "available",
+            "effective_at": "2026-11-13T19:02:13.202Z"
+          }
+        ]
+      },
+      {
+        "id": "output",
+        "role": "output",
+        "dimension": "output_token",
+        "sku_id": "5016",
+        "unit": "1k_tokens",
+        "billing_unit_size": 1000,
+        "display_unit_size": 1000000,
+        "rate": {
+          "uc": "1530",
+          "credits": "0.153",
+          "cny": "0.0153",
+          "usd": "0.00225"
+        },
+        "minimum_charge": {
+          "uc": "100",
+          "credits": "0.01",
+          "cny": "0.001",
+          "usd": "0.00014706"
+        },
+        "billing_rule": "per_token",
+        "pricing_status": "available",
+        "effective_at": "2026-11-13T19:02:13.202Z",
+        "quantity_rule": {
+          "op": "divide",
+          "args": [
+            {
+              "op": "variable",
+              "name": "output_tokens"
+            },
+            {
+              "op": "constant",
+              "value": "1000"
+            }
+          ]
+        },
+        "rounding": {
+          "point": "per_component_subtotal",
+          "mode": "ceil"
+        },
+        "tiers": [
+          {
+            "when": {
+              "op": "gt",
+              "args": [
+                {
+                  "op": "variable",
+                  "name": "prompt_tokens"
+                },
+                {
+                  "op": "constant",
+                  "value": "200000"
+                }
+              ]
+            },
+            "multiplier": "1",
+            "sku_id": "5016",
+            "rate": {
+              "uc": "1530",
+              "credits": "0.153",
+              "cny": "0.0153",
+              "usd": "0.00225"
+            },
+            "minimum_charge": {
+              "uc": "100",
+              "credits": "0.01",
+              "cny": "0.001",
+              "usd": "0.00014706"
+            },
+            "billing_rule": "per_token",
+            "pricing_status": "available",
+            "effective_at": "2026-11-13T19:02:13.202Z"
+          }
+        ]
+      }
+    ]
+  }
+}

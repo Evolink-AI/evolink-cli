@@ -7,7 +7,7 @@ import { resolveModel, suggestModels } from '../services/model-catalog.js';
 import { formatIssues, validateInput } from '../services/param-validator.js';
 import { formatEstimateRange } from '../services/pricing-client.js';
 import { PricingRulesError, reusablePricingRules } from '../services/pricing-rules-client.js';
-import { QuoteError, QuoteParameters } from '../services/pricing-quote-client.js';
+import { QuoteError, QuoteParameters, quoteErrorAt, quoteErrorFields } from '../services/pricing-quote-client.js';
 import { calculateRulesEstimate, createRulesEstimate, readPricingRulesFor, recentRulesNote } from '../services/pricing-rules-estimate.js';
 import { qwenTTSInput } from '../services/qwen-tts-tokens.js';
 import { prepareSeedanceInput } from '../services/seedance-input.js';
@@ -143,7 +143,7 @@ export function registerEstimateCost(server, config) {
                 });
             if (error instanceof QuoteError)
                 return failure(`${error.message} Nothing was submitted or charged.`, {
-                    error: { category: 'estimate_unavailable', code: error.code, ...(error.param ? { param: error.param } : {}) },
+                    error: { category: 'estimate_unavailable', ...quoteErrorFields(error) },
                     pricing_source: pricingSource, submission_allowed: false, final_budget_enforced: false, charged: 'no', ...(inputs ? { batch: { items: inputs.length } } : {})
                 });
             const failed = errorResult(error);
@@ -254,7 +254,7 @@ async function estimateBatch(config, entry, inputs, options) {
             return calculateRulesEstimate(body, entry, item.input, { mediaSeconds: options.mediaSeconds, pricingParameters: options.pricingParameters });
         }
         catch (error) {
-            throw error instanceof QuoteError ? new QuoteError(error.code, `inputs[${index}]: ${error.message}`, error.param) : error;
+            throw error instanceof QuoteError ? quoteErrorAt(error, index) : error;
         }
     });
     const total = batchTotal(entry.id, results), combined = total.estimate, status = total.status;

@@ -13,9 +13,11 @@ const MAX_JSON_DEPTH = 64;
 const decimal = z.string().max(64).regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/);
 const signedDecimal = z.string().max(64).regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/);
 const identifier = (max) => z.string().trim().max(max).regex(/^[a-z0-9][a-z0-9._:-]*$/);
+const modelName = z.string().trim().toLowerCase().pipe(identifier(100));
+const aliasName = z.string().trim().max(100).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const optionalFilter = (schema) => z.preprocess(value => typeof value === 'string' && value.trim() === '' ? undefined : value, schema.optional());
 export const PricingRulesQuery = z.object({
-    model: optionalFilter(identifier(100)), product_id: optionalFilter(identifier(100)),
+    model: optionalFilter(modelName).describe('Model ID or a published alias; model names are case-insensitive.'), product_id: optionalFilter(identifier(100)),
     operation: optionalFilter(z.string().trim().toLowerCase().pipe(identifier(50))),
     modality: optionalFilter(z.string().trim().toLowerCase().pipe(z.enum(['text', 'image', 'video', 'audio']))),
     lifecycle: optionalFilter(z.string().trim().toLowerCase().pipe(z.enum(['active', 'preview', 'deprecated']))),
@@ -70,6 +72,7 @@ const Parameter = z.object({ name: z.string().min(1).max(100), type: z.string().
 });
 const Model = z.object({
     model_id: identifier(100), product_id: identifier(100), operation: identifier(50),
+    aliases: z.array(aliasName).max(100).optional(),
     modality: z.enum(['text', 'image', 'video', 'audio']), lifecycle: z.enum(['active', 'preview', 'deprecated']),
     pricing_status: z.enum(['available', 'unavailable']), settlement_basis: z.string().min(1).max(100),
     policy_version: z.number().int().nonnegative(), policy_checksum: z.string().regex(/^[a-f0-9]{64}$/),
@@ -213,13 +216,22 @@ export function cachedPricingRules(input) {
     return old && old.expires > Date.now() ? old.body : undefined;
 }
 const stillFresh = (entry) => Date.parse(entry.body.meta.fresh_until) > Date.now();
+/** Only identities explicitly published by this rule match; never infer names from a prefix or resemblance. */
+function matchesModel(rule, model) {
+    const name = model.trim().toLowerCase();
+    return rule.model_id === name || rule.aliases?.some(alias => alias.toLowerCase() === name) === true;
+}
 /** One model's full rules from the cache: its own entry, else its row in the cached full list. */
 function cachedModel(model, usable) {
     const own = cache.get(rulesURL(PricingRulesQuery.parse({ model, view: 'full' })).href);
     if (own && usable(own))
         return own;
     const list = cache.get(rulesURL(PricingRulesQuery.parse({ view: 'full' })).href);
-    const rule = list && usable(list) && 'models' in list.body ? list.body.models.find(item => item.model_id === model) : undefined;
+    const rows = list && usable(list) && 'models' in list.body ? list.body.models : [];
+    const exact = rows.find(item => item.model_id === model.toLowerCase());
+    const aliases = exact ? [] : rows.filter(item => matchesModel(item, model));
+    // An ambiguous alias in a list is resolved by the single-model endpoint, not by list order.
+    const rule = exact ?? (aliases.length === 1 ? aliases[0] : undefined);
     return list && rule ? { body: { meta: list.body.meta, model: rule }, fetchedAt: list.fetchedAt } : undefined;
 }
 /** One model's full rules read at most maxAgeMs ago, even past their fresh_until: an estimate's fallback while the platform limits requests. */
@@ -289,7 +301,7 @@ export async function getPricingRules(input, options = {}) {
             }
             let body = validatePricingRules(await readBody(response), Boolean(query.model));
             const models = 'model' in body ? [body.model] : body.models;
-            if (models.some(model => (query.model && model.model_id !== query.model)
+            if (models.some(model => (query.model && !matchesModel(model, query.model))
                 || (query.product_id && model.product_id !== query.product_id) || (query.operation && model.operation !== query.operation)
                 || (query.modality && model.modality !== query.modality) || (query.lifecycle && model.lifecycle !== query.lifecycle))) {
                 throw new PricingRulesError('mismatched_pricing_rules');

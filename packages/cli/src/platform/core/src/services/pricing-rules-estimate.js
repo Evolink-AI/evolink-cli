@@ -2,7 +2,7 @@
 // Generated from Evolink-AI/evolink-mcp; adapted for direct REST operations. See platform/LICENSE and platform/NOTICE.
 import { z } from 'zod';
 import { PricingRulesError, getPricingRules, recentModelRules } from './pricing-rules-client.js';
-import { QuoteError, compareDecimal, isUsageParameter, prepareQuoteParameters, quoteRequestHash } from './pricing-quote-client.js';
+import { QuoteError, compareDecimal, isUsageParameter, prepareQuoteParameters, quoteRequestHash, reservationErrorOrigin } from './pricing-quote-client.js';
 import { prepareSeedanceInput } from './seedance-input.js';
 import { searchUsage } from './search-usage.js';
 import { CONSERVATIVE_QUOTE_PARAMETERS } from './pricing-derived.js';
@@ -219,6 +219,14 @@ const omniParameters = (rule, usage) => tokenParameters(rule, usage.tokens);
 function reservation(rule, entry, input, countPromptTokens, mediaSeconds) {
     if (!reservesTokens(rule, entry))
         return undefined;
+    try {
+        return tokenReservation(rule, entry, input, countPromptTokens, mediaSeconds);
+    }
+    catch (error) {
+        throw error instanceof QuoteError ? reservationErrorOrigin(error, entry, input) : error;
+    }
+}
+function tokenReservation(rule, entry, input, countPromptTokens, mediaSeconds) {
     const id = entry.id.toLowerCase();
     if (isOmniTokenModel(id)) {
         const usage = omniReservation(id, input, mediaSeconds, { countPromptTokens });
@@ -417,8 +425,9 @@ export const ApprovedRulesEstimate = z.object({ source: z.literal('pricing_rules
     fingerprint: z.string().regex(/^[a-f0-9]{64}$/), total_uc: z.string().max(32).regex(/^\d+$/),
     expires_at: z.string().datetime({ offset: true }), batch_items: z.number().int().min(1).max(MAX_BATCH_ITEMS).optional() }).strict();
 function economicRules(rule) {
-    // Freshness and configuration timestamps do not change the approved price.
-    return { ...rule, components: rule.components.map(({ effective_at, official_rate, ...c }) => ({ ...c,
+    // Identity aliases, freshness and configuration timestamps do not change the approved price.
+    const { aliases: _aliases, ...economic } = rule;
+    return { ...economic, components: rule.components.map(({ effective_at, official_rate, ...c }) => ({ ...c,
             tiers: c.tiers.map(({ effective_at, official_rate, ...t }) => t) })) };
 }
 /** countPromptTokens replaces the approximate prompt token count, for comparing with the gateway's exact count. */
@@ -428,8 +437,12 @@ export function calculateRulesEstimate(body, entry, input, options = {}) {
         fail('pricing_rules_unavailable', 'This model has no available published media pricing policy.');
     }
     const prepared = prepareSeedanceInput(entry, qwenTTSInput(entry.id, input));
-    if (prepared.errors.length)
-        throw new QuoteError('invalid_quote_parameter', `${prepared.errors[0].param} ${prepared.errors[0].problem}`, prepared.errors[0].param);
+    if (prepared.errors.length) {
+        const issue = prepared.errors[0];
+        const check = issue.param === 'duration' ? 'range' : issue.param === 'quality' ? 'conflict'
+            : issue.param === 'model_params.web_search' ? 'type' : 'shape';
+        throw new QuoteError('invalid_quote_parameter', `${issue.param} ${issue.problem}`, issue.param, 'caller', check, 'seedance');
+    }
     const effectiveInput = prepared.input;
     const declared = new Set((rule.parameters ?? []).map(p => p.name));
     const id = entry.id.toLowerCase();

@@ -29,8 +29,10 @@ const family25 = (model) => model.trim().toLowerCase().startsWith('gpt-image-2.5
 const family1 = (model) => model === 'gpt-image-1.5' || model === 'gpt-image-1';
 /** Models the gateway reserves and bills by token counts. */
 export const isTokenImageModel = (model) => model === 'gpt-image-2' || family1(model) || family25(model);
-function invalid(param, message) { throw new QuoteError('invalid_quote_parameter', message, param); }
-const text = (param, value) => value === undefined ? '' : typeof value === 'string' ? value : invalid(param, `${param} must be a string.`);
+function invalid(param, message, check = 'range') {
+    throw new QuoteError('invalid_quote_parameter', message, param, undefined, check, 'gpt_image');
+}
+const text = (param, value) => value === undefined ? '' : typeof value === 'string' ? value : invalid(param, `${param} must be a string.`, 'type');
 const nestedParams = (input) => input.model_params && typeof input.model_params === 'object' && !Array.isArray(input.model_params)
     ? input.model_params : {};
 const lower = (value) => typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -81,8 +83,8 @@ function outputSize(size, resolution) {
         return pixels;
     }
     const ratio = ['', 'auto'].includes(trimmed.toLowerCase()) ? '1:1' : trimmed.toLowerCase();
-    const aspect = RATIOS[ratio] ?? invalid('size', `size ${size} is not a supported ratio or WxH pixel size.`);
-    const tier = resolution.trim().toUpperCase() || '1K', budget = BUDGETS[tier] ?? invalid('resolution', `resolution ${resolution} must be 1K, 2K or 4K.`);
+    const aspect = RATIOS[ratio] ?? invalid('size', `size ${size} is not a supported ratio or WxH pixel size.`, 'enum');
+    const tier = resolution.trim().toUpperCase() || '1K', budget = BUDGETS[tier] ?? invalid('resolution', `resolution ${resolution} must be 1K, 2K or 4K.`, 'enum');
     const [width, height] = fitBudget(roundToStep(Math.trunc(Math.sqrt(budget * aspect[0] / aspect[1]))), roundToStep(Math.trunc(Math.sqrt(budget * aspect[1] / aspect[0]))));
     checkPixels(width, height);
     return [width, height];
@@ -96,7 +98,7 @@ function family1Size(size) {
         return [1024, 1536];
     if (['1536x1024', '1536×1024', '3:2'].includes(value))
         return [1536, 1024];
-    return invalid('size', `size ${size} must be 1024x1024, 1024x1536, 1536x1024, 1:1, 2:3 or 3:2.`);
+    return invalid('size', `size ${size} must be 1024x1024, 1024x1536, 1536x1024, 1:1, 2:3 or 3:2.`, 'enum');
 }
 function scaledTiles(base, longer, shorter) {
     // The calculator's own order of division: base * shorter / longer differs in the last bit for a few sizes.
@@ -152,7 +154,7 @@ function gifSheet(model, size, frames, quality) {
     if (!['', 'auto'].includes(trimmed.toLowerCase())) {
         const pixels = trimmed.includes(':') ? undefined : pixelSize(trimmed);
         if (!pixels)
-            invalid('size', `With output_format gif, size is auto or the WIDTHxHEIGHT of each frame, not ${size}.`);
+            invalid('size', `With output_format gif, size is auto or the WIDTHxHEIGHT of each frame, not ${size}.`, 'shape');
         [frameWidth, frameHeight] = pixels;
         if (frameWidth % STEP || frameHeight % STEP || frameWidth > MAX_EDGE || frameHeight > MAX_EDGE) {
             invalid('size', `GIF frame edges must be multiples of ${STEP} and at most ${MAX_EDGE}px, got ${frameWidth}x${frameHeight}.`);
@@ -205,30 +207,30 @@ function gifOutput(model, input, images) {
     const params = nestedParams(input);
     const format = lower(input.output_format) || lower(params.output_format), background = lower(input.background) || lower(params.background);
     if (background === 'transparent' && (format === 'jpeg' || format === 'jpg'))
-        invalid('background', `background transparent needs png or webp output; ${format} cannot keep transparency.`);
+        invalid('background', `background transparent needs png or webp output; ${format} cannot keep transparency.`, 'conflict');
     if (!family26(model))
         return false;
     // SVG output is paused on the gateway, and its author model would be priced on top, so it is never quoted.
     if (format === 'svg')
-        invalid('output_format', `output_format svg is not available on ${model}; use png, jpeg, webp or gif.`);
+        invalid('output_format', `output_format svg is not available on ${model}; use png, jpeg, webp or gif.`, 'enum');
     if (['svg_model', 'svg_reasoning_effort'].some(key => Object.hasOwn(params, key)))
-        invalid('model_params', 'model_params.svg_model and svg_reasoning_effort need output_format svg, which is not available.');
+        invalid('model_params', 'model_params.svg_model and svg_reasoning_effort need output_format svg, which is not available.', 'conflict');
     if (format !== 'gif' && ['frame_count', 'frame_duration_ms'].some(key => Object.hasOwn(params, key)))
-        invalid('model_params', 'model_params.frame_count and frame_duration_ms need output_format gif.');
+        invalid('model_params', 'model_params.frame_count and frame_duration_ms need output_format gif.', 'conflict');
     const markup = [input.markup_url, params.markup_url].map(value => typeof value === 'string' ? value.trim() : '').find(Boolean);
     if (markup) {
         if (!(referenceCount(input.image_url) + referenceCount(input.image_urls) + referenceCount(params.image_url) + referenceCount(params.image_urls))) {
-            invalid('markup_url', 'markup_url marks up the first reference image, so it needs image_urls.');
+            invalid('markup_url', 'markup_url marks up the first reference image, so it needs image_urls.', 'required');
         }
         if ([input.mask_url, params.mask_url].some(value => typeof value === 'string' && value.trim() !== ''))
-            invalid('markup_url', 'markup_url cannot be combined with mask_url.');
+            invalid('markup_url', 'markup_url cannot be combined with mask_url.', 'conflict');
     }
     if (format !== 'gif')
         return false;
     if (images > 1)
-        invalid('n', `output_format gif on ${model} needs n=1.`);
+        invalid('n', `output_format gif on ${model} needs n=1.`, 'conflict');
     if (background === 'transparent')
-        invalid('background', 'background transparent needs png or webp output, not gif.');
+        invalid('background', 'background transparent needs png or webp output, not gif.', 'conflict');
     return true;
 }
 /**
@@ -238,11 +240,11 @@ function gifOutput(model, input, images) {
  * countPromptTokens replaces the approximation when the exact count is known.
  */
 export function tokenImageReservation(model, input, countPromptTokens = approximatePromptTokens) {
-    const n = input.n === undefined ? 1 : Number.isInteger(input.n) ? Math.max(1, input.n) : invalid('n', 'n must be a whole number.');
+    const n = input.n === undefined ? 1 : Number.isInteger(input.n) ? Math.max(1, input.n) : invalid('n', 'n must be a whole number.', 'type');
     const given = text('quality', input.quality);
     const quality = given === '' ? family1(model) ? 'high' : 'medium' : given.trim().toLowerCase();
     if (!Object.hasOwn(family1(model) ? TILES_1 : family25(model) ? BASE_25 : BASE_2, quality))
-        invalid('quality', `quality ${given} is not supported by ${model}.`);
+        invalid('quality', `quality ${given} is not supported by ${model}.`, 'enum');
     const size = text('size', input.size), resolution = text('resolution', input.resolution);
     const auto = !family1(model) && ['', 'auto'].includes(size.trim().toLowerCase());
     let output, outputTokens;

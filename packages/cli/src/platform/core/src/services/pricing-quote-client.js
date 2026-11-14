@@ -31,11 +31,59 @@ export const ApprovedAccountQuote = z.object({ quote: AccountQuoteSchema,
 export class QuoteError extends Error {
     code;
     param;
-    constructor(code, message, param) {
+    origin;
+    check;
+    validator;
+    itemIndex;
+    constructor(code, message, param, origin, check, validator, itemIndex) {
         super(message);
         this.code = code;
         this.param = param;
+        this.origin = origin;
+        this.check = check;
+        this.validator = validator;
+        this.itemIndex = itemIndex;
     }
+}
+/** The structured error both quoting tools return: the code, and for a rejected value its parameter, origin and check. */
+export function quoteErrorFields(error) {
+    return { code: error.code, ...(error.param ? { param: error.param } : {}),
+        ...(error.origin ? { origin: error.origin } : {}), ...(error.check ? { check: error.check } : {}),
+        ...(error.validator ? { validator: error.validator } : {}),
+        ...(error.itemIndex !== undefined ? { item_index: error.itemIndex } : {}) };
+}
+/** Keep a batch item's diagnostics while adding its location; input values never become diagnostic fields. */
+export function quoteErrorAt(error, index) {
+    return new QuoteError(error.code, `inputs[${index}]: ${error.message}`, error.param, error.origin, error.check, error.validator, index);
+}
+/** Attribute the token calculators' reviewed checks without guessing from an English error message. */
+export function reservationErrorOrigin(error, entry, input) {
+    if (error.code !== 'invalid_quote_parameter' || error.origin || !error.check)
+        return error;
+    const parts = (error.param ?? '').split('.');
+    let value = input, spec;
+    for (let i = 0; i < parts.length; i++) {
+        value = value && typeof value === 'object' && !Array.isArray(value) ? value[parts[i]] : undefined;
+        spec = i === 0 ? entry.spec?.params[parts[i]] : spec?.properties?.[parts[i]];
+    }
+    // The gateway also reads some image settings from model_params.
+    if (value === undefined && parts.length === 1 && input.model_params && typeof input.model_params === 'object' && !Array.isArray(input.model_params)) {
+        value = input.model_params[parts[0]];
+        spec = entry.spec?.params.model_params?.properties?.[parts[0]] ?? spec;
+    }
+    if (value === undefined && error.param === 'video_urls')
+        value = input.video_url ?? input.video;
+    if (value === undefined && error.param === 'image_urls')
+        value = input.image_url ?? input.image_start ?? input.image_end ?? input.image;
+    const documented = error.check === 'enum' && spec?.enum?.some(option => option === value) === true;
+    const origin = error.param === 'model' ? 'service' : documented ? 'documented'
+        : value === undefined && ['enum', 'type', 'shape'].includes(error.check) ? 'service' : 'caller';
+    return new QuoteError(error.code, error.message, error.param, origin, error.check, error.validator, error.itemIndex);
+}
+/** The model's documentation pins this setting to listed values or bounds, which input validation enforces. */
+function documentedLimits(spec) {
+    return !!spec && ((spec.enum?.length ?? 0) > 0 || spec.minimum !== undefined || spec.maximum !== undefined
+        || spec.exclusiveMinimum !== undefined || spec.exclusiveMaximum !== undefined);
 }
 function canonical(value) {
     if (Array.isArray(value))
@@ -49,7 +97,9 @@ export function quoteRequestHash(model, input, mediaSeconds, pricingParameters =
     return createHash('sha256').update(canonical({ model: model.toLowerCase(), input, media_seconds: mediaSeconds,
         pricing_parameters: pricingParameters })).digest('hex');
 }
-function fail(code, message, param) { throw new QuoteError(code, message, param); }
+function fail(code, message, param, origin, check) {
+    throw new QuoteError(code, message, param, origin, check);
+}
 const aliases = { duration_seconds: ['duration'], output_seconds: ['duration'], image_count: ['n', 'count'],
     video_count: ['n', 'count'], resolution: ['quality'], quality: ['resolution'] };
 const measured = /(?:tokens|input_seconds|output_seconds|source_output_seconds|first_input_video_seconds|search_count)$/;
@@ -86,29 +136,42 @@ export function prepareQuoteParameters(rule, entry, input, pricingParameters = {
             fail('conflicting_quote_parameter', `Conflicting generation values for ${name}.`, name);
         }
         let value = supplied[0];
+        // Whose value this is, so a rejection below can say so (never the value itself): see QuoteValueOrigin.
+        let origin;
+        if (value !== undefined) {
+            const key = generationNames.find(k => given(k) !== undefined);
+            origin = asRule(given(key)) !== given(key) ? 'service' : documentedLimits(documented(key)) ? 'documented' : 'caller';
+        }
+        const fill = (candidate, from) => {
+            if (value === undefined && candidate !== undefined)
+                [value, origin] = [candidate, from];
+        };
         // A promptless Midjourney V7 edit runs and bills as fast whatever speed was requested.
         if (value === undefined && name === 'prompt_present')
-            value = typeof input.prompt === 'string' && effectiveMjV7EditPrompt(input.prompt) !== '';
+            fill(typeof input.prompt === 'string' && effectiveMjV7EditPrompt(input.prompt) !== '', 'service');
         // Some rule parameters come from differently named request fields, as the gateway pre-deducts them.
         if (value === undefined)
-            value = derivedQuoteParameter(model, name, input, nestedInput);
+            fill(derivedQuoteParameter(model, name, input, nestedInput), 'service');
         if (value === undefined && name === 'input_images') {
             if (Array.isArray(input.image_urls))
-                value = input.image_urls.length;
+                fill(input.image_urls.length, 'caller');
             else if (typeof input.image_url === 'string')
-                value = 1;
+                fill(1, 'caller');
             else
-                value = 0;
+                fill(0, 'caller');
         }
         // Expected usage cannot change settings or references the model will actually receive.
         if (value === undefined && pricingParameters[name] !== undefined && !usage(name)
             && generationNames.some(key => documented(key) !== undefined)) {
-            value = asRule(generationNames.map(key => documented(key)?.default).find(v => v !== undefined) ?? p.default);
+            fill(asRule(generationNames.map(key => documented(key)?.default).find(v => v !== undefined) ?? p.default), 'service');
         }
         if (pricingParameters[name] !== undefined) {
             if (value !== undefined && String(value) !== String(pricingParameters[name])) {
                 fail('conflicting_quote_parameter', `Pricing parameter ${name} differs from the generation input.`, name);
             }
+            // Repeating a generation value or default keeps where it came from; only a value nothing else gave is the caller's.
+            if (value === undefined)
+                origin = 'caller';
             value = pricingParameters[name];
         }
         if (name === 'input_seconds' && value !== undefined && mediaSeconds !== undefined
@@ -117,11 +180,11 @@ export function prepareQuoteParameters(rule, entry, input, pricingParameters = {
         }
         // media_seconds describes measured input length, never an unknown generated output.
         if (value === undefined && name === 'input_seconds' && mediaSeconds !== undefined)
-            value = mediaSeconds;
+            fill(mediaSeconds, 'caller');
         if (value === undefined && name === 'first_input_video_seconds' && mediaSeconds !== undefined)
-            value = mediaSeconds;
+            fill(mediaSeconds, 'caller');
         if (value === undefined && ['output_seconds', 'duration_seconds'].includes(name) && mediaSeconds !== undefined && entry.spec && !entry.spec.params.duration && !declared.has('duration') && entry.spec?.constraints?.outputDuration !== 'unknown')
-            value = mediaSeconds;
+            fill(mediaSeconds, 'caller');
         if (value === undefined && name === 'duration_seconds' && declared.has('duration') && String(input.duration ?? pricingParameters.duration ?? entry.spec?.params.duration?.default ?? declared.get('duration')?.default) === '-1') {
             if (allowMissingUsage)
                 continue;
@@ -134,7 +197,7 @@ export function prepareQuoteParameters(rule, entry, input, pricingParameters = {
         }
         if (value === undefined && !usage(name)) {
             const defaults = generationNames.map(key => documented(key)?.default).filter(v => v !== undefined).map(asRule);
-            value = defaults[0];
+            fill(defaults[0], 'service');
         }
         const references = Array.isArray(input.video_urls) && input.video_urls.length > 0
             || typeof input.video_url === 'string' && input.video_url.trim().length > 0
@@ -142,26 +205,27 @@ export function prepareQuoteParameters(rule, entry, input, pricingParameters = {
         // Zero is an illustration for enabled search, never measured usage or an execution limit.
         // The rules evaluator separately records the missing actual/expected search count.
         if (value === undefined && search?.enabled && allowMissingUsage)
-            value = '0';
+            fill('0', 'service');
         if (value === undefined && usage(name) && (p.required || references || /tokens$/.test(name) || search?.enabled || (name === 'search_count' && input.web_search === true) || p.default === undefined)) {
             if (allowMissingUsage)
                 continue;
             fail('quote_usage_required', `Provide measured or expected usage for ${name} in pricing_parameters.`, name);
         }
         if (value === undefined)
-            value = CONSERVATIVE_QUOTE_PARAMETERS[`${model.toLowerCase()} ${name}`]?.value;
+            fill(CONSERVATIVE_QUOTE_PARAMETERS[`${model.toLowerCase()} ${name}`]?.value, 'service');
         if (value === undefined)
-            value = p.default;
+            fill(p.default, 'service');
         if (value === undefined) {
             if (p.required)
                 fail('quote_parameter_required', `Pricing parameter ${name} is required.`, name);
             continue;
         }
+        const reject = (problem, check) => fail('invalid_quote_parameter', `Pricing parameter ${name} ${problem}`, name, origin, check);
         if (!['string', 'number', 'boolean'].includes(typeof value) || (typeof value === 'number' && !Number.isFinite(value))) {
-            fail('invalid_quote_parameter', `Pricing parameter ${name} must be a finite scalar.`, name);
+            reject('must be a finite scalar.', 'scalar');
         }
         if (typeof value === 'string' && value.length > 128)
-            fail('invalid_quote_parameter', `Pricing parameter ${name} is too long.`, name);
+            reject('is too long.', 'length');
         if (p.type === 'integer' || p.type === 'decimal') {
             if (typeof value === 'number' && String(value).includes('e')) {
                 const negative = value < 0, [mantissa, exponent] = String(Math.abs(value)).split('e');
@@ -169,25 +233,25 @@ export function prepareQuoteParameters(rule, entry, input, pricingParameters = {
                 value = (negative ? '-' : '') + (point <= 0 ? '0.' + '0'.repeat(-point) + digits
                     : point >= digits.length ? digits + '0'.repeat(point - digits.length) : digits.slice(0, point) + '.' + digits.slice(point));
                 if (String(value).length > 128)
-                    fail('invalid_quote_parameter', `Pricing parameter ${name} is too long.`, name);
+                    reject('is too long.', 'length');
             }
             if (typeof value === 'boolean' || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(String(value))
                 || (p.type === 'integer' && !/^-?(?:0|[1-9]\d*)$/.test(String(value)))) {
-                fail('invalid_quote_parameter', `Pricing parameter ${name} must be ${p.type}.`, name);
+                reject(`must be ${p.type}.`, 'type');
             }
             if ((p.minimum !== undefined && compareDecimal(String(value), p.minimum) < 0)
                 || (p.maximum !== undefined && compareDecimal(String(value), p.maximum) > 0)) {
-                fail('invalid_quote_parameter', `Pricing parameter ${name} is outside the published range.`, name);
+                reject('is outside the published range.', 'range');
             }
         }
         else if (p.type === 'boolean' && typeof value !== 'boolean') {
-            fail('invalid_quote_parameter', `Pricing parameter ${name} must be boolean.`, name);
+            reject('must be boolean.', 'boolean');
         }
         // Published enums may spell numbers as strings ("5") while the generation input carries a number (5);
         // lookup expressions compare by text, so the allowed-value check does the same.
         const allowed = p.values ?? p.enum;
         if (allowed && !allowed.some(candidate => String(candidate) === String(value)))
-            fail('invalid_quote_parameter', `Pricing parameter ${name} is not an allowed value.`, name);
+            reject('is not an allowed value.', 'enum');
         if (search && !search.enabled
             && compareDecimal(String(value), '0') !== 0) {
             fail('conflicting_quote_parameter', `${name} must be zero when ${search.input_parameter} is not enabled.`, name);

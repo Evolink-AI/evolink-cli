@@ -6,7 +6,7 @@ import { BATCH_REQUEST_ID_MAX, BATCH_SUBMIT_CONCURRENCY, MAX_BATCH_ITEMS, batchT
 import { resolveModel, suggestModels } from '../services/model-catalog.js';
 import { formatIssues, validateInput } from '../services/param-validator.js';
 import { formatEstimateRange } from '../services/pricing-client.js';
-import { ApprovedAccountQuote, QuoteParameters, QuoteError } from '../services/pricing-quote-client.js';
+import { ApprovedAccountQuote, QuoteParameters, QuoteError, quoteErrorAt, quoteErrorFields } from '../services/pricing-quote-client.js';
 import { ApprovedRulesEstimate, REFERENCE_BUDGET_FACTOR, amountsForUC, calculateRulesEstimate, createRulesEstimate, checkRulesApproval, readPricingRulesFor, referenceAllowance, referenceBudgetExceeded, rulesBudgetExceeded } from '../services/pricing-rules-estimate.js';
 import { PricingRulesError } from '../services/pricing-rules-client.js';
 import { isOmniTokenModel } from '../services/omni-tokens.js';
@@ -420,7 +420,7 @@ function registerGenerate(server, config, kind) {
                     charged: 'no', submission_state: 'not_submitted'
                 });
             if (error instanceof QuoteError)
-                return failure(`${error.message} Nothing was submitted or charged.`, { error: { category: 'estimate_unavailable', code: error.code }, charged: 'no', submission_state: 'not_submitted' });
+                return failure(`${error.message} Nothing was submitted or charged.`, { error: { category: 'estimate_unavailable', ...quoteErrorFields(error) }, charged: 'no', submission_state: 'not_submitted' });
             // clientRequestId is set right before the submit, so it also tells whether a request may have gone out.
             return errorResult(error, { paid: clientRequestId !== undefined, clientRequestId, taskId: acceptedTaskId,
                 phase: acceptedTaskId ? 'accepted' : clientRequestId ? 'submit_started' : 'before_submit' });
@@ -527,7 +527,7 @@ async function generateBatch(config, kind, args, extra, startedMono) {
             catch (error) {
                 itemSkipped[index] = skipEstimate ? unpriced(error) : undefined;
                 if (!itemSkipped[index])
-                    throw error instanceof QuoteError ? new QuoteError(error.code, `inputs[${index}]: ${error.message}`, error.param) : error;
+                    throw error instanceof QuoteError ? quoteErrorAt(error, index) : error;
                 return undefined;
             }
         }) : [];
@@ -707,7 +707,7 @@ async function generateBatch(config, kind, args, extra, startedMono) {
             });
         if (error instanceof QuoteError)
             return failure(`${error.message} Nothing was submitted or charged.`, {
-                error: { category: 'estimate_unavailable', code: error.code }, charged: 'no', submission_state: 'not_submitted', batch
+                error: { category: 'estimate_unavailable', ...quoteErrorFields(error) }, charged: 'no', submission_state: 'not_submitted', batch
             });
         // Each submission reports its own outcome, so an error here came before any item was submitted.
         return errorResult(error, { paid: false, clientRequestId: batchId, phase: 'before_submit' });

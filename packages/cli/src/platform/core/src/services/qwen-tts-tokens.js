@@ -50,14 +50,16 @@ export function qwenCharacterClass(character) {
         return 'punctuation';
     return 'other';
 }
-function invalid(param, message) { throw new QuoteError('invalid_quote_parameter', message, param); }
+function invalid(param, message, check) {
+    throw new QuoteError('invalid_quote_parameter', message, param, 'caller', check, 'qwen_tts');
+}
 /** A string as the gateway decodes it from the request JSON: an unpaired surrogate becomes U+FFFD. */
 const decoded = (text) => text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
 function textParam(input, param) {
     const value = input[param];
     if (value === undefined || value === null)
         return '';
-    return typeof value === 'string' ? decoded(value) : invalid(param, `${param} must be a string.`);
+    return typeof value === 'string' ? decoded(value) : invalid(param, `${param} must be a string.`, 'type');
 }
 const characters = (text) => [...text].length;
 /** strings.TrimSpace(text) == "": only the characters unicode.IsSpace accepts. */
@@ -78,7 +80,7 @@ function byCodePoint(a, b) {
 }
 /** validateQwenAudioTTSHotFix: {pronunciation?, replace?}, each a non-empty list of {"word": "value"} objects. */
 function checkHotFix(hotFix) {
-    const shape = () => invalid('hot_fix', 'hot_fix must be an object with pronunciation and/or replace arrays of {"word": "value"} objects.');
+    const shape = () => invalid('hot_fix', 'hot_fix must be an object with pronunciation and/or replace arrays of {"word": "value"} objects.', 'shape');
     if (!isObject(hotFix) || !Object.keys(hotFix).length)
         shape();
     let entries = 0;
@@ -96,7 +98,7 @@ function checkHotFix(hotFix) {
         }
     }
     if (entries > MAX_HOT_FIX_ENTRIES)
-        invalid('hot_fix', `hot_fix may contain at most ${MAX_HOT_FIX_ENTRIES} entries in total, got ${entries}.`);
+        invalid('hot_fix', `hot_fix may contain at most ${MAX_HOT_FIX_ENTRIES} entries in total, got ${entries}.`, 'count');
 }
 /**
  * QwenAudioTTSEffectiveText: the text after hot_fix.replace, item by item and each item's words in code point order,
@@ -147,7 +149,7 @@ export function goJSONCharacters(value) {
     if (typeof value === 'boolean')
         return value ? 4 : 5;
     // checkHotFix leaves only objects, lists and strings; Go writes numbers differently from JavaScript.
-    return invalid('hot_fix', 'hot_fix holds only objects, lists and strings.');
+    return invalid('hot_fix', 'hot_fix holds only objects, lists and strings.', 'shape');
 }
 /**
  * The tokens the gateway reserves at submission for this input. The text is prompt, or input when prompt is empty;
@@ -156,22 +158,22 @@ export function goJSONCharacters(value) {
 export function qwenTTSReservation(input) {
     const prompt = textParam(input, 'prompt'), alias = textParam(input, 'input');
     if (prompt !== '' && alias !== '' && prompt !== alias)
-        invalid('input', 'prompt and input differ; send only one.');
+        invalid('input', 'prompt and input differ; send only one.', 'conflict');
     const text = prompt !== '' ? prompt : alias;
     if (blank(text))
-        invalid('prompt', 'prompt is required.');
+        invalid('prompt', 'prompt is required.', 'required');
     if (characters(text) > QWEN_TTS_MAX_TEXT)
-        invalid('prompt', `prompt must be at most ${QWEN_TTS_MAX_TEXT} characters, got ${characters(text)}.`);
+        invalid('prompt', `prompt must be at most ${QWEN_TTS_MAX_TEXT} characters, got ${characters(text)}.`, 'length');
     const instruction = textParam(input, 'instruction');
     const billed = billingCharacters(instruction);
     if (billed > MAX_INSTRUCTION)
-        invalid('instruction', `instruction must be at most ${MAX_INSTRUCTION} billing characters (Han characters count as 2), got ${billed}.`);
+        invalid('instruction', `instruction must be at most ${MAX_INSTRUCTION} billing characters (Han characters count as 2), got ${billed}.`, 'length');
     const hotFix = input.hot_fix === null ? undefined : input.hot_fix;
     if (hotFix !== undefined)
         checkHotFix(hotFix);
     const effective = qwenEffectiveText(text, hotFix);
     if (!effective.ok)
-        invalid('hot_fix', `prompt must be at most ${QWEN_TTS_MAX_TEXT} characters after hot_fix.replace is applied, got ${effective.characters}.`);
+        invalid('hot_fix', `prompt must be at most ${QWEN_TTS_MAX_TEXT} characters after hot_fix.replace is applied, got ${effective.characters}.`, 'length');
     const hotFixCharacters = hotFix === undefined ? 0 : goJSONCharacters(hotFix);
     const expressive = instruction !== '' || effective.text.includes('[');
     const classes = { han: 0, caseless: 0, lower: 0, punctuation: 0, other: 0 };
