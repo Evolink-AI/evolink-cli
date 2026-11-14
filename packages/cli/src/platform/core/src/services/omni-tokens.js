@@ -50,7 +50,9 @@ export function approximateOmniPromptTokens(prompt) {
     }
     return Math.ceil(hundredths / 100);
 }
-function invalid(param, message) { throw new QuoteError('invalid_quote_parameter', message, param); }
+function invalid(param, message, check = 'count') {
+    throw new QuoteError('invalid_quote_parameter', message, param, undefined, check, 'omni');
+}
 const textOf = (value) => typeof value === 'string' ? value : '';
 /** parseFlexibleStringArray: one string or a list; empty and non-string entries do not count. */
 const flexible = (value) => typeof value === 'string' ? value === '' ? [] : [value]
@@ -86,12 +88,12 @@ const upscaleMax = (target) => Math.max(0, ...Object.entries(UPSCALE).filter(([p
 const upscaleSource = (target) => TIERS.find(tier => UPSCALE[`${tier}>${target}`] === upscaleMax(target));
 function checkLength(mediaSeconds, max, what, model) {
     if (mediaSeconds > max)
-        invalid('media_seconds', `${what} must be ${max} seconds or shorter for ${model}; media_seconds is ${mediaSeconds}.`);
+        invalid('media_seconds', `${what} must be ${max} seconds or shorter for ${model}; media_seconds is ${mediaSeconds}.`, 'range');
 }
 function requirePrompt(input, model) {
     const prompt = textOf(input.prompt);
     if (prompt.trim() === '')
-        invalid('prompt', `prompt is required for ${model}.`);
+        invalid('prompt', `prompt is required for ${model}.`, 'required');
     return prompt;
 }
 /**
@@ -100,7 +102,7 @@ function requirePrompt(input, model) {
  * countPromptTokens replaces the approximate prompt count when the gateway's exact count is known.
  */
 export function omniReservation(model, input, mediaSeconds, options = {}) {
-    const id = model.trim().toLowerCase(), found = omniModel(id) ?? invalid('model', `${model} is not a Gemini Omni Flash model.`);
+    const id = model.trim().toLowerCase(), found = omniModel(id) ?? invalid('model', `${model} is not a Gemini Omni Flash model.`, 'enum');
     const count = options.countPromptTokens ?? approximateOmniPromptTokens, route = found.route, g = found.generation;
     const tokensOf = (prompt) => prompt === '' ? 0 : count(prompt);
     if (!g)
@@ -110,9 +112,9 @@ export function omniReservation(model, input, mediaSeconds, options = {}) {
     const start = textOf(input.image_start).trim(), end = textOf(input.image_end).trim();
     if (start || end) {
         if (route !== 'image')
-            invalid('image_start', `image_start and image_end are only for gemini-omni-${g.label}-flash-image-to-video.`);
+            invalid('image_start', `image_start and image_end are only for gemini-omni-${g.label}-flash-image-to-video.`, 'conflict');
         if (end && !start)
-            invalid('image_end', 'image_end needs image_start: a last frame only is not supported.');
+            invalid('image_end', 'image_end needs image_start: a last frame only is not supported.', 'required');
     }
     const duration = durationOf(input.duration);
     if (route === 'text' && (images.length || videos.length))
@@ -123,7 +125,7 @@ export function omniReservation(model, input, mediaSeconds, options = {}) {
         if (videos.length)
             invalid('video_urls', `${id} takes no video input.`);
         if (images.length === 2 && duration > g.maxFrameOutput)
-            invalid('duration', `first and last frame generation supports up to ${g.maxFrameOutput} seconds on ${id}, got ${duration}.`);
+            invalid('duration', `first and last frame generation supports up to ${g.maxFrameOutput} seconds on ${id}, got ${duration}.`, 'range');
     }
     if (route === 'reference') {
         if (images.length < 1)
@@ -138,16 +140,16 @@ export function omniReservation(model, input, mediaSeconds, options = {}) {
         if (videos.length !== 1)
             invalid('video_urls', `${id} takes exactly 1 video, got ${videos.length}.`);
         if (!isHTTP(videos[0]))
-            invalid('video_urls', `${id} takes the video as an http(s) URL.`);
+            invalid('video_urls', `${id} takes the video as an http(s) URL.`, 'shape');
     }
     // An upscale takes no prompt; the gateway drops one.
     const prompt = route === 'upscale' ? '' : requirePrompt(input, id);
     const quality = textOf(input.quality).trim().toLowerCase();
     const follows = (route === 'edit' || route === 'extend') && (quality === '' || quality === 'auto');
     if (quality !== '' && !follows && !TIERS.includes(quality))
-        invalid('quality', `quality ${input.quality} is not supported by ${id}.`);
+        invalid('quality', `quality ${input.quality} is not supported by ${id}.`, 'enum');
     if (route === 'upscale' && (quality === '' || quality === '360p'))
-        invalid('quality', `quality on ${id} is the target resolution: 720p, 1080p or 4k.`);
+        invalid('quality', `quality on ${id} is the target resolution: 720p, 1080p or 4k.`, 'enum');
     const tier = (quality === '' || quality === 'auto' ? DEFAULT_TIER : quality);
     // Input and reference videos: the gateway reads their length at submission and refuses one that is too long.
     let input_videos;
@@ -169,7 +171,7 @@ export function omniReservation(model, input, mediaSeconds, options = {}) {
             const target = quality, source = options.inputTier ?? upscaleSource(target);
             const rate = UPSCALE[`${source}>${target}`];
             if (rate === undefined)
-                invalid('quality', `${id} cannot upscale ${source} to ${target}; supported: 360p to 720p or 1080p, 720p to 1080p or 4k, 1080p to 4k.`);
+                invalid('quality', `${id} cannot upscale ${source} to ${target}; supported: 360p to 720p or 1080p, 720p to 1080p or 4k, 1080p to 4k.`, 'conflict');
             return { ...base, route, prompt_tokens: 0, output: { resolution: target, seconds: input_videos.seconds },
                 upscale: { target, source, source_assumed: options.inputTier === undefined, tokens_per_second: rate },
                 tokens: { input_tokens: 0, video_output_tokens: cap(rate * input_videos.seconds), other_output_tokens: 0 } };
@@ -195,11 +197,11 @@ function reservation10(id, route, input, mediaSeconds, tokensOf) {
     const images = media10(input, 'image_urls', 'image_url', 'image'), videos = media10(input, 'video_urls', 'video_url', 'video');
     // validateGeminiOmniFlashRequest: no resolution or frame fields, an edit takes no duration, and the media each route takes.
     if (textOf(input.quality) !== '')
-        invalid('quality', `quality is not supported by ${id}.`);
+        invalid('quality', `quality is not supported by ${id}.`, 'conflict');
     if (textOf(input.image_start) !== '' || textOf(input.image_end) !== '')
-        invalid('image_start', `image_start and image_end are not supported by ${id}; use image_urls.`);
+        invalid('image_start', `image_start and image_end are not supported by ${id}; use image_urls.`, 'conflict');
     if (route === 'edit' && (durationOf(input.duration) !== 0 || input.duration === 'auto'))
-        invalid('duration', `duration is not supported by ${id}.`);
+        invalid('duration', `duration is not supported by ${id}.`, 'conflict');
     if (route === 'text' && (images.length || videos.length))
         invalid('image_urls', `${id} takes no image or video input.`);
     if (route === 'image' && images.length !== 1)
@@ -214,7 +216,7 @@ function reservation10(id, route, input, mediaSeconds, tokensOf) {
         if (videos.length !== 1)
             invalid('video_urls', `${id} takes exactly 1 video, got ${videos.length}.`);
         if (!isHTTP(videos[0]))
-            invalid('video_urls', `${id} takes the video as an http(s) URL.`);
+            invalid('video_urls', `${id} takes the video as an http(s) URL.`, 'shape');
     }
     const prompt = requirePrompt(input, id), promptTokens = tokensOf(prompt);
     let input_videos, inputTokens = promptTokens;

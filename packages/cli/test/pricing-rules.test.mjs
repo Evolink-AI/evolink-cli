@@ -86,10 +86,13 @@ test('seed 20261009: pricing command preserves all filters and rejects unrelated
 
 test('installed command reads anonymous rules with no keyring, and invalid filters send no request', async t => {
   let requests = 0;
+  const aliasBody = JSON.parse(readFileSync(new URL('./fixtures/pricing-rules-aliases-20261114.json', import.meta.url)));
+  aliasBody.meta.fresh_until = new Date(Date.now() + 300_000).toISOString();
   const server = http.createServer((req, res) => {
-    requests++; assert.equal(req.headers.authorization, undefined); assert.ok(req.url.startsWith('/v1/catalog/pricing-rules'));
+    requests++; assert.equal(req.headers.authorization, undefined); assert.ok(req.url.startsWith('/v1/catalog/'));
     assert.match(req.headers['user-agent'], /^EvoLinkCLI\//);
-    res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body()));
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(req.url.startsWith('/v1/catalog/models/') ? aliasBody : body()));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)));
   const resource = `http://127.0.0.1:${server.address().port}/mcp`;
@@ -105,4 +108,13 @@ test('installed command reads anonymous rules with no keyring, and invalid filte
   assert.equal(requests, 1);
   const invalid = await run(['--model', 'Bad/Model']); assert.equal(invalid.status, 1); assert.equal(invalid.view.ok, false);
   assert.equal(requests, 1);
+  for (const view of ['summary', 'full']) {
+    const alias = await run(['--model', 'GEMINI-2.5-FLASH', '--view', view]);
+    assert.equal(alias.status, 0); assert.equal(alias.view.model.model_id, 'gemini-3.5-flash-lite');
+    assert.deepEqual(alias.view.model.aliases, ['gemini-2.5-flash']);
+    assert.equal(alias.view.requested_model, 'gemini-2.5-flash');
+  }
+  const unrelated = await run(['--model', 'unknown-model']);
+  assert.equal(unrelated.status, 1); assert.equal(unrelated.view.error.code, 'mismatched_pricing_rules');
+  assert.equal(requests, 4);
 });

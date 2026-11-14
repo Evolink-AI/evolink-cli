@@ -18,7 +18,7 @@ const COMMANDS = {
   'models search': ['[options]', 'Search currently available models; search order is not a quality ranking.', { query: string('Search keywords'), type: allMedia, limit: integer(1, 50, 20), page: integer(1, 100000, 1) }],
   'models show': ['MODEL', 'Read documented parameters, example input, reference fields and pricing. Free.', {}],
   'models pricing': ['[options]', 'Read public default pricing rules without login. Decimal-string rates, minimums, tiers and expressions are configuration references, not account prices, quotes, bills or final spending caps. Coverage follows returned policies and legacy text adapters; empty results do not mean free.', {
-    model: string('Exact model ID; omit for the filtered list'), 'product-id': string('Product ID'), operation: string('Operation, e.g. text_generation'),
+    model: string('Model ID or a published alias (case-insensitive); omit for the filtered list'), 'product-id': string('Product ID'), operation: string('Operation, e.g. text_generation'),
     modality: choice(['text', 'image', 'video', 'audio']), lifecycle: choice(['active', 'preview', 'deprecated']), view: { ...choice(['summary', 'full']), default: 'full' },
   }],
   'models schema': ['MODEL', 'Read versioned input and generation-submission response schemas. The response schema may omit final task outputs; runtime constraints also apply.', {}],

@@ -8,7 +8,7 @@ import { failure, ok, READ_ONLY, retryText } from './shared.js';
 export function registerPricingRules(server, config) {
     server.registerTool('get_pricing_rules', {
         title: 'Read public pricing rules',
-        description: 'Read schema-2 public default pricing rules, decimal-string rates including fractional UC, minimum charges, tiers and optional full expressions. Free and anonymous upstream. The returned price_selection, when present, identifies route-priority prices or legacy minimum configuration prices. Coverage follows the returned published policies and supported legacy text adapters, including media when available. These are public reference rates, not account prices, live availability, a task quote, a bill or a final spending cap. Do not substitute these rules for media estimate_cost or assume empty media results are free.',
+        description: 'Read schema-2 public default pricing rules, decimal-string rates including fractional UC, minimum charges, tiers and optional full expressions. Free and anonymous upstream. Model IDs and published aliases are case-insensitive; results keep the canonical model_id and published aliases. The returned price_selection, when present, identifies route-priority prices or legacy minimum configuration prices. Coverage follows the returned published policies and supported legacy text adapters, including media when available. These are public reference rates, not account prices, live availability, a task quote, a bill or a final spending cap. Do not substitute these rules for media estimate_cost or assume empty media results are free.',
         inputSchema: PricingRulesQuery.shape,
         annotations: { title: 'Read public pricing rules', ...READ_ONLY },
     }, async (input) => {
@@ -37,12 +37,15 @@ export function registerPricingRules(server, config) {
                 warnings.push(`${rejected.length} model(s) were left out because their published rules could not be read: ${rejected.slice(0, 20).join(', ')}${rejected.length > 20 ? `, and ${rejected.length - 20} more` : ''}. Missing rules do not mean these models are free.`);
             }
             const lines = [`Public pricing rules (${body.meta.price_scope}; ${selection}; ${source}); ${models.length} model(s).`, ...warnings];
+            if (input.model && 'model' in body && input.model !== body.model.model_id) {
+                lines.push(`Requested model ${input.model} resolves to ${body.model.model_id} through a published alias.`);
+            }
             for (const model of models) {
                 lines.push(`${model.model_id} (${model.modality}; ${model.pricing_status}; ${model.policy_source} v${model.policy_version})`);
                 for (const component of model.components)
                     lines.push(`- ${component.role}: ${component.rate.usd} USD (${component.rate.credits} credits) per ${component.billing_unit_size} ${component.unit === '1k_tokens' ? 'tokens' : component.unit}; minimum ${component.minimum_charge.usd} USD; ${component.tiers.length} tier(s); ${component.pricing_status}.`);
             }
-            return ok(lines.join('\n'), { ...body, pricing_source: source,
+            return ok(lines.join('\n'), { ...body, ...(input.model ? { requested_model: input.model } : {}), pricing_source: source,
                 pricing_endpoint: '/v1/catalog/pricing-rules', quote_established: false, final_budget_enforced: false,
                 account_price: false, warnings });
         }
