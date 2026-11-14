@@ -5,13 +5,13 @@
   "description": "evolink-config: one-command API setup for Claude Code and Codex on EvoLink. Checks the key and balance, writes the config safely, and can undo it.",
   "license": "MIT",
   "author": "EvoLink AI <support@evolink.ai>",
-  "homepage": "https://github.com/deeplearning-goethe/evolink-cli#readme",
+  "homepage": "https://github.com/Evolink-AI/evolink-cli#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/deeplearning-goethe/evolink-cli.git"
+    "url": "git+https://github.com/Evolink-AI/evolink-cli.git"
   },
   "bugs": {
-    "url": "https://github.com/deeplearning-goethe/evolink-cli/issues"
+    "url": "https://github.com/Evolink-AI/evolink-cli/issues"
   },
   "keywords": [
     "evolink",
