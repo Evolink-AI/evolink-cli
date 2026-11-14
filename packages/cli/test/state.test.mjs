@@ -70,6 +70,76 @@ test('separate processes recover a dead owner and keep subsequent operations exc
   assert.equal(await fs.readFile(path.join(home, 'trace'), 'utf8'), 'start\nend\n'.repeat(6));
 });
 
+// Only timing is controlled: X pauses in its first removal (recovering a dead owner) and, when
+// releasing, after its release removed the record; V pauses before recording itself in the
+// directory it created, which X's recovery removes in the meantime.
+async function lateRecord(t, releasing) {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'evolink-late-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const children = [];
+  t.after(() => { for (const child of children) if (child.exitCode === null) child.kill(); });
+  const at = name => path.join(home, name), signal = name => fs.writeFile(at(name), '');
+  const seen = async (name, ms = 20_000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise(r => setTimeout(r, 10))) {
+      if (await fs.access(at(name)).then(() => true, () => false)) return true;
+    }
+    return false;
+  };
+  const prelude = String.raw`import { State } from ${JSON.stringify(moduleURL)};
+    import * as fs from 'node:fs/promises'; import path from 'node:path';
+    import { createRequire, syncBuiltinESMExports } from 'node:module';
+    const home = process.argv[1], at = name => path.join(home, name);
+    const shared = createRequire(${JSON.stringify(moduleURL)})('node:fs/promises');
+    const { rm, unlink, writeFile } = shared, signal = name => writeFile(at(name), '');
+    const seen = async name => { while (!await fs.access(at(name)).then(() => true, () => false)) await new Promise(r => setTimeout(r, 10)); };
+    const work = (name, until) => new State(home).lock('shared', async () => {
+      await fs.appendFile(at('trace'), name + ' start\n'); await signal(name + '-inside');
+      if (until) await seen(until); else await new Promise(r => setTimeout(r, 100));
+      await fs.appendFile(at('trace'), name + ' end\n');
+    });`;
+  function start(code) {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `${prelude}\n${code}`, home], { stdio: ['ignore', 'pipe', 'pipe'] });
+    child.err = ''; child.stderr.on('data', b => { child.err += b; });
+    child.closed = once(child, 'close'); children.push(child); return child;
+  }
+  const holder = start(`await new State(home).lock('shared', async () => { await signal('holder-inside'); await new Promise(() => setInterval(() => {}, 1000)); });`);
+  assert.ok(await seen('holder-inside'));
+  holder.kill('SIGKILL'); await holder.closed;
+  start(`let removals = 0;
+    shared.rm = async (target, options) => {
+      if (path.basename(String(target)) === 'shared') {
+        removals++;
+        if (removals === 1) { await signal('x-stale'); await seen('go-x'); }
+        if (removals === 2 && ${releasing}) { await unlink(path.join(String(target), 'owner.json')); await signal('x-unrecorded'); await seen('go-x2'); }
+      }
+      return rm(target, options);
+    };
+    syncBuiltinESMExports(); await work('X', 'release-x');`);
+  assert.ok(await seen('x-stale'));
+  start(`let paused = false;
+    shared.writeFile = async (file, ...rest) => {
+      if (paused || path.basename(String(file)) !== 'owner.json') return writeFile(file, ...rest);
+      paused = true; await signal('v-created'); await seen('go-v');
+      try { return await writeFile(file, ...rest); } finally { await signal('v-recorded'); }
+    };
+    syncBuiltinESMExports(); await work('V', 'release-v');`);
+  assert.ok(await seen('v-created'));
+  await signal('go-x'); assert.ok(await seen('X-inside'));
+  if (releasing) { await signal('release-x'); assert.ok(await seen('x-unrecorded')); }
+  await signal('go-v'); assert.ok(await seen('v-recorded'));
+  assert.equal(await seen('V-inside', 1000), false, releasing ? 'V entered while X was releasing' : 'V joined X inside the lock');
+  if (releasing) { await signal('go-x2'); start(`await work('W');`); } else await signal('release-x');
+  await signal('release-v');
+  for (const child of children.slice(1)) { const [code] = await child.closed; assert.equal(code, 0, child.err); }
+  const trace = await fs.readFile(at('trace'), 'utf8');
+  assert.match(trace, /^(?:([XVW]) start\n\1 end\n)+$/, trace);
+  assert.equal(trace.match(/ start\n/g).length, releasing ? 3 : 2);
+}
+
+test('a command whose new lock directory a recovery removed does not join the next owner', t => lateRecord(t, false));
+
+test('a command recording itself while an owner releases waits for the release', t => lateRecord(t, true));
+
 test('a live recovery ticket blocks entry until its owner exits; legacy empty guards do not block', async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'evolink-recovery-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
@@ -94,12 +164,14 @@ test('a live recovery ticket blocks entry until its owner exits; legacy empty gu
 test('an operation error is propagated once and never reruns the protected operation', async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'evolink-lock-error-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
-  let runs = 0;
-  await assert.rejects(new State(home).lock('shared', async () => {
-    runs++;
-    throw Object.assign(new Error('missing result'), { code: 'ENOENT' });
-  }), { code: 'ENOENT' });
-  assert.equal(runs, 1);
+  for (const code of ['ENOENT', 'EEXIST']) {
+    let runs = 0;
+    await assert.rejects(new State(home).lock('shared', async () => {
+      runs++;
+      throw Object.assign(new Error('operation failed'), { code });
+    }), { code });
+    assert.equal(runs, 1);
+  }
   assert.equal(await new State(home).lock('shared', async () => 'next'), 'next');
 });
 
