@@ -6,7 +6,7 @@
 
 这是另一个工具，和上面的 `evolink` 不是一回事：它把 Claude Code、Codex 的模型接口配到 EvoLink 上，命令名是 `evolink-config`。它不发布到 npm，用下面的一行命令从 CDN 运行；源码在本仓库根目录（`bin/evolink.mjs`）。0.4.0 及以前这个工具的启动器也叫 `evolink`，0.5.0 起改名，避免和 npm 上的 `evolink` 混淆。
 
-[![CI](https://github.com/deeplearning-goethe/evolink-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/deeplearning-goethe/evolink-cli/actions/workflows/ci.yml)
+[![CI](https://github.com/Evolink-AI/evolink-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/Evolink-AI/evolink-cli/actions/workflows/ci.yml)
 
 一条命令把 Claude Code 或 Codex 接到 [EvoLink](https://evolink.ai)：检查环境 → 校验 Key 和余额 → 安全地写配置（先备份、只改自己负责的项）→ 发一条测试请求 → 告诉用户下一步。另有 `doctor`（自检，输出可以直接发给客服）和 `reset`（撤销）。
 

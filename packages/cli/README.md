@@ -241,7 +241,7 @@ All machine-readable commands accept `--json`. Stdout contains one envelope with
 
 Run installation and tests on the test cloud host, not the development Mac. In this package directory: `npm ci`, `npm test`, `npm run test:mutations`, and `npm pack`. Tests use loopback fixtures and never spend production credits. Real paid acceptance requires a separate quote and user approval.
 
-Development starts in `deeplearning-goethe/evolink-cli`. After acceptance, repository management will arrange migration to `Evolink-AI/evolink-cli`. Keep package/bin names and service identity stable; update repository metadata, publishing permissions and installation links during migration.
+The repository is `Evolink-AI/evolink-cli`. Development started in `deeplearning-goethe/evolink-cli`, which moved here on 2026-11-14 and is now archived: its history and release tags were carried over, while its earlier pull requests and GitHub releases stay in the archived repository. Package and command names and the service identity did not change; the npm package's repository link points here from its next release.
 
 ## Platform and MCP paths
 
