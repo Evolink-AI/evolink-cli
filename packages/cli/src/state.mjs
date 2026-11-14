@@ -60,6 +60,17 @@ async function recovering(dir) {
   }
   return active;
 }
+// A command can record itself late in a directory that is being released only after a recovery
+// ran for this lock, and a recovery leaves its directory behind. The release then holds a ticket
+// there like a recovery does, so that command waits for the release and finds its record removed.
+async function release(dir, recovery) {
+  const ticket = path.join(recovery, `${hostID}.${process.pid}.${randomUUID()}`);
+  const held = await fs.writeFile(ticket, '', { flag: 'wx', mode: 0o600 }).then(() => true, error => {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  });
+  try { await removeLock(dir); } finally { if (held) await fs.unlink(ticket); }
+}
 
 export class State {
   // Retain the original storage location so renaming the command preserves sessions and request IDs.
@@ -116,16 +127,19 @@ export class State {
       if (!acquired) { busy(); await pause(); continue; }
       let entered = false;
       try {
-        await fs.writeFile(path.join(dir, 'owner.json'), JSON.stringify({ pid: process.pid, hostname: os.hostname(), token }), { mode: 0o600 });
+        // Exclusive: a command whose new directory a recovery removed may only get here after the
+        // directory was created again, and must not replace the record of that newer owner.
+        await fs.writeFile(path.join(dir, 'owner.json'), JSON.stringify({ pid: process.pid, hostname: os.hostname(), token }), { flag: 'wx', mode: 0o600 });
         while (await recovering(recovery)) { busy(); await pause(); }
-        // Another recovery may have removed this not-yet-entered owner.
+        // Another recovery or a release may have removed this not-yet-entered owner.
         if ((await ownerOf(dir))?.token !== token) { busy(); continue; }
         entered = true;
         return await fn();
       } catch (error) {
-        if (entered || error.code !== 'ENOENT') throw error;
+        // ENOENT: the directory was removed first. EEXIST: another command recorded itself first.
+        if (entered || (error.code !== 'ENOENT' && error.code !== 'EEXIST')) throw error;
       } finally {
-        if ((await ownerOf(dir))?.token === token) await removeLock(dir);
+        if ((await ownerOf(dir))?.token === token) await release(dir, recovery);
       }
       busy();
     }
