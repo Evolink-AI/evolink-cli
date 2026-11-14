@@ -112,7 +112,11 @@ const mutants = [
   ['delivery-existing-receipt', 'src/files.mjs', "requireThat(!receipt, 'delivery_exists'", "requireThat(true, 'delivery_exists'"],
   ['delivery-commit-journal', 'src/files.mjs', 'await beforeCommit?.(receipt);', 'await Promise.resolve();'],
   ['lock-crash-ticket', 'src/state.mjs', 'match[1] === hostID && dead(Number(match[2]))', 'false'],
-  ['lock-error-propagation', 'src/state.mjs', "entered || error.code !== 'ENOENT'", "error.code !== 'ENOENT'"],
+  ['lock-error-propagation', 'src/state.mjs', "entered || (error.code !== 'ENOENT' && error.code !== 'EEXIST')", "(error.code !== 'ENOENT' && error.code !== 'EEXIST')"],
+  // A late record never replaces a newer owner's record, and a release holds a ticket where a recovery ran.
+  ['lock-exclusive-record', 'src/state.mjs', "hostname: os.hostname(), token }), { flag: 'wx', mode: 0o600 });", "hostname: os.hostname(), token }), { mode: 0o600 });"],
+  ['lock-lost-record-retry', 'src/state.mjs', "(error.code !== 'ENOENT' && error.code !== 'EEXIST')", "error.code !== 'ENOENT'"],
+  ['lock-release-ticket', 'src/state.mjs', "const held = await fs.writeFile(ticket, '', { flag: 'wx', mode: 0o600 }).then(() => true, error => {", 'const held = await Promise.resolve().then(() => false, error => {'],
   ['state-replace-retry', 'src/state.mjs', "if (process.platform !== 'win32' || !busyReplace.has(error.code) || attempt === 10) throw error;", 'throw error;'],
   ['state-replace-windows-only', 'src/state.mjs', "if (process.platform !== 'win32' || !busyReplace.has", 'if (!busyReplace.has'],
   ['state-replace-codes', 'src/state.mjs', '!busyReplace.has(error.code) || attempt', 'attempt'],
