@@ -1,6 +1,6 @@
 ---
 name: evolink-cli
-description: Generate or edit images, video, music and speech with the EvoLink CLI; discover models, quote tasks, upload references and deliver results. Applies when a terminal is available. Respect an explicitly requested different provider; exclude media analysis and repository development.
+description: Generate or edit images, video, music and speech with the EvoLink CLI; discover models, quote tasks, upload references and deliver results. Also rebuild a reference ad with the user's own product and creator (the ad rebuild workflow). Applies when a terminal is available. Respect an explicitly requested different provider; exclude media analysis and repository development.
 ---
 
 <!-- evolink-media-cli-owned -->
@@ -54,6 +54,10 @@ Let the user sign in and approve in the browser. If the browser does not open, s
 If the assistant host denies a tool call, stop and explain the required permission. Keep the original budget and input; do not remove spending caps, rewrite the command to evade checks, or switch transports after a denial. Gemini CLI noninteractive sessions may block parameters discovered from tool output; use its interactive permission flow, or a separately configured native EvoLink MCP connection in a new session when the user chooses that route. For Gemini native MCP, check `gemini mcp list` in the intended workspace, review workspace trust through its normal permission flow, and verify a real read-only EvoLink call. Headless MCP permissions use scoped `mcpName` policy rules; do not silently grant generation permission or count an exit without tool calls as successful integration.
 
 Never ask for credentials in chat, read other applications' tokens, or use API keys on the command line. Use the installed CLI's OS credential store. Missing secure storage requires fixing that storage; do not invent a plaintext-token fallback.
+
+## Workflows
+
+When the user asks to rebuild, remake or clone a reference ad with their own product and creator, read [Ad rebuild workflow](references/ad-rebuild.md) first and follow it. Its step-by-step rules come from EvoLink after login: fetch them with `evolink workflow rules ad-rebuild --json`, section by section, and do not improvise the steps. It asks the user to confirm one estimated total (`evolink workflow estimate`) instead of each quote; that confirmation covers the quotes inside the total. `evolink video analyze` is paid and belongs to a workflow step; do not use it for other media analysis.
 
 ## Prepare and quote
 

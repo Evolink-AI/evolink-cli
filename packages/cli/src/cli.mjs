@@ -9,6 +9,7 @@ import { upload, download, downloadAll, getUpload } from './files.mjs';
 import { commandHelp } from './help.mjs';
 import { installSkill, skillStatus, validateAgent } from './skills.mjs';
 import { doctor } from './doctor.mjs';
+import { Workflows } from './workflow.mjs';
 import { setup } from './setup.mjs';
 import { checkForUpdate, updateNotice } from './update.mjs';
 import { CLI_VERSION } from './version.mjs';
@@ -82,6 +83,15 @@ const HELP = `EvoLink CLI ${CLI_VERSION} (Node.js 22+)
   uploads get ID                 Read a saved upload receipt (free)
   download TASK_ID --output FILE [--index N]
   download TASK_ID --all --output-dir DIR [--template NAME] [--resume]
+  workflow rules NAME [--section ID] [--run RUN_ID]
+                                 Step-by-step rules of an EvoLink workflow (free)
+  workflow estimate NAME --seconds N --keyframes N [--run RUN_ID]
+           [--quality 480p|720p|1080p] [--aspect-ratio RATIO] [--creator-images N]
+                                 One estimated total for a whole run (free)
+  video analyze FILE_URL --run RUN_ID --step STEP --purpose PURPOSE
+           [--target-file FILE] [--attempt N]
+                                 Read a video for a workflow step (paid, by tokens)
+  video analysis ANALYSIS_ID     Collect a read that was still running (free)
   skills install [--agent NAME] [--replace-modified]
                                  Install or update; back up replaced files
   skills status [--agent NAME]   Check installed skill content and CLI version
@@ -115,6 +125,9 @@ lower submits; a higher price, a changed input or an expired quote needs a new a
 who explicitly said not to estimate or confirm.
 A batch quote submits all its inputs in one call; tasks resume finishes the rest
 with the same request ID within 23 hours, while the quote holds.
+Workflows (for example ad-rebuild) need the login: their rules and video reads come
+from the EvoLink MCP service named by --server. video analyze is charged to the account;
+the same command repeated within 24 hours returns the first result without a new charge.
 Spending caps protect the estimate at submission, not final settlement.
 Ctrl-C stops local waiting; submitted tasks continue on EvoLink.
 `;
@@ -123,7 +136,8 @@ Ctrl-C stops local waiting; submitted tasks continue on EvoLink.
 const NO_UPDATE_NOTICE = new Set(['setup', 'doctor', 'auth login', 'auth status']);
 
 const OPTIONS = Object.fromEntries(['server', 'api-url', 'files-url', 'query', 'type', 'limit', 'model', 'modality', 'view', 'product-id', 'operation', 'lifecycle', 'input', 'input-file', 'inputs-file', 'prompt', 'media-seconds',
-  'pricing-source', 'pricing-parameters', 'refresh-quote', 'max-cost-usd', 'quote', 'timeout', 'status', 'since', 'until', 'page', 'ids', 'references', 'max-pages', 'output', 'output-dir', 'template', 'index', 'upload-path', 'agent'].map(k => [k, { type: 'string' }]));
+  'pricing-source', 'pricing-parameters', 'refresh-quote', 'max-cost-usd', 'quote', 'timeout', 'status', 'since', 'until', 'page', 'ids', 'references', 'max-pages', 'output', 'output-dir', 'template', 'index', 'upload-path', 'agent',
+  'section', 'run', 'seconds', 'keyframes', 'quality', 'aspect-ratio', 'creator-images', 'step', 'purpose', 'target-file', 'attempt'].map(k => [k, { type: 'string' }]));
 for (const k of ['json', 'token-stdin', 'no-browser', 'replace-modified', 'confirm', 'skip-estimate', 'wait', 'all', 'resume', 'help', 'version']) OPTIONS[k] = { type: 'boolean' };
 
 function number(value, name, min, max, integer = false) {
@@ -148,6 +162,8 @@ export function validateCommand(args, options) {
     'tasks get': [3], 'tasks wait': [3, 'timeout'], 'tasks batch': [2, 'ids'], 'tasks list': [2, 'type', 'status', 'since', 'until', 'model', 'page', 'limit'], 'tasks resume': [2, 'quote'],
     upload: [2, 'upload-path'], 'uploads get': [3], download: [2, 'output', 'index', 'all', 'output-dir', 'template', 'resume'],
     'skills install': [2, 'agent', 'replace-modified'], 'skills status': [2, 'agent'], doctor: [1, 'agent'],
+    'workflow rules': [3, 'section', 'run'], 'workflow estimate': [3, 'run', 'seconds', 'keyframes', 'quality', 'aspect-ratio', 'creator-images'],
+    'video analyze': [3, 'run', 'step', 'purpose', 'target-file', 'attempt'], 'video analysis': [3],
   };
   const route = routes[`${command} ${action}`] || routes[command];
   requireThat(route && args.length === route[0], 'unknown_command', 'Unknown command or argument count. Run evolink --help.');
@@ -255,7 +271,7 @@ async function estimateArgs(options) {
   return { model: options.model, ...body, ...(pricingParameters !== undefined ? { pricing_parameters: pricingParameters } : {}), ...(options['pricing-source'] ? { pricing_source: options['pricing-source'] } : {}), ...(media !== undefined ? { media_seconds: media } : {}), ...(cap !== undefined ? { max_cost_usd: cap } : {}) };
 }
 
-export async function dispatch(positionals, options, { state, server, credentials, client, mcp = client, signal, progress, skillHome, updates, budget }) {
+export async function dispatch(positionals, options, { state, server, credentials, client, mcp = client, workflows, signal, progress, skillHome, updates, budget }) {
   // login, setup and doctor always ask the registry and report the outcome, including a disabled check;
   // loopback test resources never contact it.
   const update = () => checkForUpdate({ state, server, force: true, signal, ...updates });
@@ -343,6 +359,21 @@ export async function dispatch(positionals, options, { state, server, credential
   if (command === 'setup') return setup({ state, server, credentials, client, agent: options.agent, skillHome,
     noBrowser: options['no-browser'], timeout: options.timeout === undefined ? undefined : Number(options.timeout) * 1000, signal, progress, update });
   if (command === 'doctor') return doctor({ state, server, credentials, client, agent: options.agent, skillHome, update });
+  if ((command === 'workflow' || command === 'video') && workflows) {
+    if (command === 'workflow' && action === 'rules') return workflows.rules(id, { section: options.section, run: options.run });
+    if (command === 'workflow' && action === 'estimate') {
+      requireThat(options.seconds !== undefined && options.keyframes !== undefined, 'missing_option', 'Pass --seconds and --keyframes: the planned video length and the expected number of keyframe images.');
+      requireThat(options.quality === undefined || ['480p', '720p', '1080p'].includes(options.quality), 'invalid_option', 'quality must be 480p, 720p or 1080p.');
+      requireThat(options['aspect-ratio'] === undefined || ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].includes(options['aspect-ratio']), 'invalid_option', 'aspect-ratio must be 16:9, 9:16, 1:1, 4:3, 3:4 or 21:9.');
+      return workflows.estimate(id, { run: options.run, seconds: number(options.seconds, 'seconds', 1, 600, true), keyframes: number(options.keyframes, 'keyframes', 1, 100, true),
+        quality: options.quality, aspectRatio: options['aspect-ratio'], creatorImages: number(options['creator-images'], 'creator-images', 0, 10, true) });
+    }
+    if (command === 'video' && action === 'analyze') {
+      requireThat(options.run && options.step && options.purpose, 'missing_option', 'Pass --run, --step and --purpose, as the workflow rules name them.');
+      return workflows.analyze(id, { run: options.run, step: options.step, purpose: options.purpose, targetFile: options['target-file'], attempt: number(options.attempt, 'attempt', 1, 3, true) });
+    }
+    if (command === 'video' && action === 'analysis') return workflows.analysis(id);
+  }
   throw new CliError('unknown_command', 'Unknown command or missing argument. Run evolink --help.');
 }
 
@@ -410,7 +441,8 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
     const client = new Api(credentials, { signal: controller.signal, apiUrl: options['api-url'], filesUrl: options['files-url'] });
     // Only a fully validated command checks: invalid tokens and service URLs fail without contacting npm.
     if (!NO_UPDATE_NOTICE.has(positionals[0]) && !NO_UPDATE_NOTICE.has(positionals.slice(0, 2).join(' '))) checkUpdate(server);
-    const result = publicView(await dispatch(positionals, options, { state, server, credentials, client, signal: controller.signal, progress: message => io.stderr.write(message + '\n'), updates, budget }));
+    const workflows = new Workflows(credentials, { signal: controller.signal });
+    const result = publicView(await dispatch(positionals, options, { state, server, credentials, client, workflows, signal: controller.signal, progress: message => io.stderr.write(message + '\n'), updates, budget }));
     const view = { schema_version: 1, ...result, ok: result.ok !== false };
     io.stdout.write(options.json ? JSON.stringify(view) + '\n' : `${result.text || JSON.stringify(view, null, 2)}\n${result.quote_id ? `Quote: ${result.quote_id}\n` : ''}`);
     if (!view.ok) process.exitCode = view.error?.code === 'interrupted' ? 130 : 1;

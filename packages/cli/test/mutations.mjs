@@ -214,6 +214,26 @@ const mutants = [
   ['reference-omni', 'src/platform/core/src/services/pricing-rules-estimate.js', "if (isOmniTokenModel(id)) {\n        const usage = omniReservation(", "if (false) {\n        const usage = omniReservation("],
   ['reference-qwen', 'src/platform/core/src/services/pricing-rules-estimate.js', "if (isQwenTTSModel(id)) {\n        const usage = qwenTTSReservation(", "if (false) {\n        const usage = qwenTTSReservation("],
   ['reference-omni-tiers', 'src/platform/core/src/services/omni-tokens.js', 'return reservation.input_videos?.resolution_assumed ? [...TIERS] : [];', 'return [];'],
+
+  // Workflow commands: the one request to the MCP service and what the CLI does with its answer.
+  ['workflow-token-header', 'src/workflow.mjs', "headers: { Authorization: `Bearer ${access.access_token}`, 'Content-Type': 'application/json',", "headers: { 'Content-Type': 'application/json',"],
+  ['workflow-renew-once', 'src/workflow.mjs', 'if (attempt === 0) continue;', 'if (false) continue;'],
+  ['workflow-unknown-tool', 'src/workflow.mjs', "const unknown = /tool \\S+ not found|unknown tool/i.test(said);", 'const unknown = false;'],
+  ['workflow-refused-values', 'src/workflow.mjs', "if (/input validation error|invalid arguments|invalid params/i.test(said)) throw", 'if (false) throw'],
+  ['workflow-account-category', 'src/workflow.mjs', "(BROAD_CATEGORIES.has(category) || !category ? finer : category)", '(finer)'],
+  ['workflow-finer-code', 'src/workflow.mjs', "(BROAD_CATEGORIES.has(category) || !category ? finer : category)", '(category)'],
+  ['workflow-cut-off-read-kept', 'src/workflow.mjs', 'if (KEPT_FAILURES.has(code)) return { ...data, ok: false, text };', ''],
+  ['workflow-result-whole', 'src/workflow.mjs', '      return { ...data, text };\n    }\n    throw new CliError', '      return { ...data, text: safeMessage(text) };\n    }\n    throw new CliError'],
+  ['workflow-unmarked-result', 'src/workflow.mjs', 'if (data.ok !== true) throw unreadable(name);', ''],
+  ['workflow-run-forwarded', 'src/workflow.mjs', "...(section !== undefined ? { section } : {}), ...(run !== undefined ? { run_id: run } : {}) });", "...(section !== undefined ? { section } : {}) });"],
+  ['workflow-commands-shown', 'src/workflow.mjs', 'text: `${COMMANDS_TEXT}\\n\\n${result.text}` };', 'text: result.text };'],
+  ['workflow-target-forwarded', 'src/workflow.mjs', '...(target !== undefined ? { target } : {}), ', ''],
+  ['workflow-empty-target', 'src/workflow.mjs', "requireThat(target.trim(), 'invalid_input', 'The target file is empty.');", ''],
+  ['workflow-target-size', 'src/workflow.mjs', 'requireThat(stat.size <= MAX_TARGET_BYTES,', 'requireThat(true,'],
+  ['workflow-read-may-run', 'src/workflow.mjs', "name === 'analyze_video' && response.status >= 500 ? READ_MAY_RUN", 'false ? READ_MAY_RUN'],
+  ['workflow-estimate-needs-plan', 'src/cli.mjs', "requireThat(options.seconds !== undefined && options.keyframes !== undefined, 'missing_option',", "requireThat(true, 'missing_option',"],
+  ['workflow-analyze-needs-run', 'src/cli.mjs', "requireThat(options.run && options.step && options.purpose, 'missing_option',", "requireThat(true, 'missing_option',"],
+  ['workflow-rate-limit-code', 'src/workflow.mjs', 'if (response.status === 429) {', 'if (false) {'],
 ];
 
 // Mutants of the update, login, local-wait and quote-refresh changes run only the test that covers them, which keeps the CI matrix fast.
@@ -245,6 +265,11 @@ const PATTERNS = {
     [['state-replace-retry', 'state-replace-windows-only', 'state-replace-codes', 'state-replace-limit'], '^on Windows a replacement denied'],
     [['mj-quote-nested-read', 'mj-quote-prompt-present'], '^Midjourney settings in model_params'],
     [['unknown-total-help', 'unknown-total-mapping', 'unknown-total-zero-amounts'], '^an estimate without its billing usage'],
+    [['workflow-token-header', 'workflow-result-whole', 'workflow-run-forwarded', 'workflow-commands-shown'], '^workflow rules: one tools/call'],
+    [['workflow-estimate-needs-plan'], '^workflow estimate: the planned output'],
+    [['workflow-target-forwarded', 'workflow-empty-target', 'workflow-target-size', 'workflow-analyze-needs-run'], '^video analyze: the read is passed on'],
+    [['workflow-account-category', 'workflow-finer-code', 'workflow-cut-off-read-kept', 'workflow-unmarked-result'], '^a failed read exits non-zero'],
+    [['workflow-renew-once', 'workflow-unknown-tool', 'workflow-refused-values', 'workflow-rate-limit-code', 'workflow-read-may-run'], '^a service without workflows'],
   ].flatMap(([names, pattern]) => names.map(name => [name, pattern]))),
 };
 
@@ -282,6 +307,7 @@ for (const [name, file, before, after] of selected) {
       : name.startsWith('mj-quote-') ? ['mj-pricing.test.mjs']
       : name.startsWith('unknown-total-') ? ['unknown-total.test.mjs']
       : name.startsWith('reference-') ? ['token-billed.test.mjs']
+      : name.startsWith('workflow-') ? ['workflow.test.mjs']
       : ['media.test.mjs', 'auth.test.mjs', 'acceptance.test.mjs', 'readiness.test.mjs', 'setup.test.mjs', 'skills.test.mjs'];
     const tests = files.map(n => path.join(home, 'test', n));
     const selection = PATTERNS[name] ? [`--test-name-pattern=${PATTERNS[name]}`] : [];
