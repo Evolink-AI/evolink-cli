@@ -212,6 +212,22 @@ Task pagination returns `page`, `page_size` and `next_page`. `since`/`until` fil
 
 All-result downloads accept up to 50 results. `--template '{task_id}-{index}.{ext}'` also supports `{kind}`; templates must produce distinct portable filenames without directories. Local receipts record sizes and SHA-256 hashes. `--resume` verifies saved files and downloads the remainder with the same task/directory/template. Changed files and unrelated existing files are preserved. Partial delivery returns successful files and per-result errors, exits nonzero, and leaves generation marked completed. Recover downloads using the original task; never regenerate to fix delivery.
 
+## Workflows
+
+A workflow is a set of step-by-step rules that EvoLink sends to a logged-in assistant, for example `ad-rebuild`: rebuild a reference ad of up to 30 seconds with your own product and creator. The package holds only the commands and a short entry page in the skill (`references/ad-rebuild.md`); the rules arrive after login.
+
+```bash
+evolink workflow rules ad-rebuild --json                  # overview, a run_id and the section list (free)
+evolink workflow rules ad-rebuild --section plan --run RUN_ID --json
+evolink workflow estimate ad-rebuild --run RUN_ID --seconds 15 --keyframes 6 --quality 720p --json   # one estimated total (free)
+evolink video analyze FILE_URL --run RUN_ID --step reference_analysis --purpose breakdown --json     # paid, by tokens
+evolink video analysis ANALYSIS_ID --json                 # collect a read that was still running (free)
+```
+
+- `workflow estimate` returns one total for the whole run from the published prices. The assistant shows that total once and asks once; the total depends mostly on the video's length and resolution.
+- `video analyze` reads an EvoLink file link or result link (MP4 or MOV, within the workflow's length limit). It is charged by tokens to the logged-in account and is part of the workflow's estimated total. Repeating exactly the same command within 24 hours returns the first result without a new charge; a failed read exits non-zero with the service's error code and next step, and a read that was cut off still prints what was read.
+- `workflow_unavailable` means the service does not offer workflows for this login yet.
+
 ## Usage and spending limits
 
 ```sh
@@ -245,7 +261,7 @@ The repository is `Evolink-AI/evolink-cli`. Development started in `deeplearning
 
 ## Platform and MCP paths
 
-The CLI uses REST and does not connect to the hosted MCP server. Browser chat clients continue to use remote MCP. Both paths currently share Passport resource permissions and the internal `EvoLink MCP (OAuth)` account limit. The authorization resource remains `https://mcp.evolink.ai/mcp`; it is distinct from the REST API destination. The gateway MCP emergency switch still applies to both paths. Total and daily limits, model permissions and pause apply to both clients; logging out revokes only the current OAuth session. Separate keys are optional when a project needs independent limits. Backend parameterized media Quote and its OAuth route must be enabled for account estimates.
+The CLI uses REST for everything except the workflow commands. `workflow rules`, `workflow estimate`, `video analyze` and `video analysis` send one `tools/call` request each to the hosted MCP server named by `--server`, because a workflow's rules and the prompts behind a video read are kept on that service and never ship with this package. Browser chat clients continue to use remote MCP. Both paths currently share Passport resource permissions and the internal `EvoLink MCP (OAuth)` account limit. The authorization resource remains `https://mcp.evolink.ai/mcp`; it is distinct from the REST API destination. The gateway MCP emergency switch still applies to both paths. Total and daily limits, model permissions and pause apply to both clients; logging out revokes only the current OAuth session. Separate keys are optional when a project needs independent limits. Backend parameterized media Quote and its OAuth route must be enabled for account estimates.
 
 The CLI vendors the reviewed shared platform module from the MCP repository with a SHA-256 source/artifact manifest in `src/platform/source.json`. Refresh it on the test host using `scripts/sync-platform-client.mjs`; never edit generated files. The MCP SDK is a development dependency for compatibility fixtures only. No extra package or MCP plugin installation is needed by CLI users.
 

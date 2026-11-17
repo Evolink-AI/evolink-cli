@@ -102,6 +102,10 @@ export async function fixture() {
       }
       if (url.pathname !== '/mcp') { send(404, {}); return; }
       state.mcpRequests = (state.mcpRequests || 0) + 1;
+      state.mcpHeaders?.push(req.headers);
+      // Workflow tests: answer this request with a plain HTTP status instead of a tool result.
+      const forced = state.mcpStatus?.(req);
+      if (forced) { res.writeHead(forced.status, forced.headers ?? {}); res.end('{}'); return; }
       if (state.mcpUnavailable) { send(503, {}); return; }
       if (req.method !== 'POST') { send(405, {}); return; }
       if (!req.headers.authorization?.startsWith('Bearer ')) { send(401, {}); return; }
@@ -145,9 +149,15 @@ export async function fixture() {
       }
       if (name === 'get_upload') data = { ...state.uploads.get(args.upload_id), upload_id: args.upload_id,
         ...(state.uploads.get(args.upload_id)?.state === 'waiting' ? { upload_url: `${state.origin}/uploads/${args.upload_id}?token=one-time-fixture-token` } : {}) };
+      // The MCP SDK answers an unknown tool, or arguments it refuses, with an error result that has text only.
+      if (state.toolErrors?.[name]) { rpc({ isError: true, content: [{ type: 'text', text: state.toolErrors[name] }] }); return; }
+      // Other MCP servers answer the same cases with a JSON-RPC error.
+      if (state.rpcErrors?.[name]) { send(200, { jsonrpc: '2.0', id: message.id, error: state.rpcErrors[name] }); return; }
       if (state.responses?.[name]) data = await state.responses[name](args);
-      data = { ok: !data?.error, ...data };
-      rpc({ isError: !data.ok, structuredContent: data, content: [{ type: 'text', text: data.ok ? data.upload_url || 'Fixture result.' : data.error.message }, { type: 'image', data: png.toString('base64'), mimeType: 'image/png' }] });
+      // _text: the text block of the tool result, when a test needs one that differs from the structured content.
+      const { _text, ...structured } = { ok: !data?.error, ...data };
+      data = structured;
+      rpc({ isError: !data.ok, structuredContent: data, content: [{ type: 'text', text: _text || (data.ok ? data.upload_url || 'Fixture result.' : data.error.message) }, { type: 'image', data: png.toString('base64'), mimeType: 'image/png' }] });
     } catch { res.writeHead(500); res.end(); }
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
