@@ -34,7 +34,13 @@ const mutants = [
   ['cap-direction', 'src/media.mjs', 'quote.estimate.max_usd <= cap', 'quote.estimate.max_usd >= cap'],
   ['partial-cap', 'src/media.mjs', "quote.estimate?.status === 'estimated' && Number.isFinite(quote.estimate.max_usd)", 'Number.isFinite(quote.estimate.max_usd)'],
   ['invalid-input', 'src/media.mjs', 'quote.input_valid !== false', 'true'],
-  ['balance', 'src/media.mjs', 'quote.enough_balance !== false', 'true'],
+  ['balance', 'src/media.mjs', 'if (quote.enough_balance === false) throw insufficientBalance(quote);', 'if (false) throw insufficientBalance(quote);'],
+  ['balance-short-gap', 'src/media.mjs', 'Math.max(0, needed - balance)', 'Math.max(0, needed)'],
+  ['balance-short-rounds-down', 'src/media.mjs', 'Math.ceil(Number((Math.max(0, needed - balance) * 10).toFixed(6)))', 'Math.round(Number((Math.max(0, needed - balance) * 10).toFixed(6)))'],
+  ['balance-short-upper-end', 'src/media.mjs', 'const needed = quote.estimate?.max_credits', 'const needed = quote.estimate?.min_credits'],
+  ['balance-short-link', 'src/media.mjs', "campaign: 'cli', content: 'top_up' })", "campaign: 'mcp_local', content: 'top_up' })"],
+  ['balance-short-next-step', 'src/media.mjs', "cause.code === 'insufficient_balance' ? cause.details?.next_step : undefined;", "false ? cause.details?.next_step : undefined;"],
+  ['balance-short-figures', 'src/media.mjs', 'short !== undefined && `short by about ${money(short)}`,', ''],
   ['mcp-limit', 'src/media.mjs', 'quote.enough_limit !== false', 'true'],
   ['daily-limit', 'src/media.mjs', 'quote.enough_daily_limit !== false', 'true'],
   ['input-validation-cap', 'src/media.mjs', 'quote.input_valid === true', 'true'],
@@ -308,6 +314,7 @@ for (const [name, file, before, after] of selected) {
       : name.startsWith('unknown-total-') ? ['unknown-total.test.mjs']
       : name.startsWith('reference-') ? ['token-billed.test.mjs']
       : name.startsWith('workflow-') ? ['workflow.test.mjs']
+      : name.startsWith('balance-short-') ? ['balance-shortfall.test.mjs']
       : ['media.test.mjs', 'auth.test.mjs', 'acceptance.test.mjs', 'readiness.test.mjs', 'setup.test.mjs', 'skills.test.mjs'];
     const tests = files.map(n => path.join(home, 'test', n));
     const selection = PATTERNS[name] ? [`--test-name-pattern=${PATTERNS[name]}`] : [];
