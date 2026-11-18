@@ -66,7 +66,7 @@ function inputSchema(kind) {
             .describe(`Compatibility option for a budget explicitly specified by the user. Compare the submission estimate against that budget; never derive this value from the estimate. This does not limit the final charge. Refuses when the estimate is incomplete or exceeds the budget; a token-billed reference price must fit ${REFERENCE_BUDGET_FACTOR} times over. With inputs it applies to the batch total.`),
         account_quote: ApprovedAccountQuote.optional().describe('Legacy approval. Refresh with estimate_cost and obtain user approval before using the new pricing rules.'),
         pricing_quote: ApprovedRulesEstimate.optional().describe('Client approval record from estimate_cost, for exactly this input (or these inputs), valid until its expires_at (24 hours from the estimate). Rechecked against fresh pricing rules before submission: refused if the input changed, the price rose or it expired; an unchanged or lower price submits. Does not bind final settlement.'),
-        pricing_parameters: QuoteParameters.optional().describe('The same explicit billing usage passed to estimate_cost.'),
+        pricing_parameters: QuoteParameters.optional().describe('The billing usage you gave estimate_cost, if any. The pricing_parameters an estimate shows are what it priced; they need not be passed back.'),
         media_seconds: z.number().positive().max(MEDIA_SECONDS_MAX).optional().describe(MEDIA_SECONDS_DESCRIPTION),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional()
             .describe(`Seconds to wait for the result after submitting, 0–${MAX_WAIT_SECONDS} (default ${WAIT_MS[kind] / 1000}; with inputs only 0). 0 returns the task_id right after submission: use it when submitting several tasks, then collect them with list_tasks.`),
@@ -535,7 +535,7 @@ async function generateBatch(config, kind, args, extra, startedMono) {
         const total = estimates ? batchTotal(entry.id, estimates) : undefined;
         if (args.pricing_quote && total) {
             try {
-                checkBatchApproval(args.pricing_quote, total.approval);
+                checkBatchApproval(args.pricing_quote, total.approval, total.requestHashes);
             }
             catch (error) {
                 if (!skipEstimate || !(error instanceof QuoteError))

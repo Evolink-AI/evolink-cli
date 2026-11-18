@@ -3,8 +3,9 @@ import { hash } from './state.mjs';
 import { CliError, requireThat, fileError } from './errors.mjs';
 import { APPROVAL_TTL_MS, REFERENCE_BUDGET_FACTOR, priceRose, referenceBudgetExceeded, rulesBudgetExceeded } from './platform/core/src/services/pricing-rules-estimate.js';
 import { compareDecimal } from './platform/core/src/services/pricing-quote-client.js';
-import { DASHBOARD_URL } from './platform/core/src/services/http-policy.js';
-import { dashboardCheck } from './platform/core/src/tools/shared.js';
+import { DASHBOARD_URL, TOP_UP_URL } from './platform/core/src/services/http-policy.js';
+import { withUtm } from './platform/core/src/services/utm.js';
+import { dashboardCheck, money } from './platform/core/src/tools/shared.js';
 import { NEXT_READ_MIN_MS, pollIntervalMs } from './platform/core/src/tools/task-format.js';
 
 /** Longest single get_task round inside a local wait; each round shares the wait's one deadline. */
@@ -105,6 +106,8 @@ function pause(ms, signal) {
 
 function quoteError(error, cap) {
   const cause = fileError(error);
+  // A short balance says where to top up (checkEstimate); every other refusal gets the general next step below.
+  const ownStep = cause instanceof CliError && cause.code === 'insufficient_balance' ? cause.details?.next_step : undefined;
   const code = cause.details?.input_valid === false ? 'invalid_input'
     : cap !== undefined && ['quote_usage_required', 'quote_parameter_required'].includes(cause.details?.error?.code) ? 'uncheckable_cap'
     : cause instanceof CliError ? cause.code : 'estimate_unavailable';
@@ -112,7 +115,7 @@ function quoteError(error, cap) {
     cause instanceof CliError ? cause.message : 'The quote could not be obtained. No generation was submitted.', {
       ...(cause instanceof CliError ? cause.details : {}), phase: 'estimate', submission_allowed: false,
       ...(cap !== undefined ? { max_cost_usd: cap } : {}),
-      next_step: 'Resolve the quote error and estimate again with the same budget. Do not use catalog starting prices as task quotes or remove the user budget.',
+      next_step: ownStep ?? 'Resolve the quote error and estimate again with the same budget. Do not use catalog starting prices as task quotes or remove the user budget.',
     }, cause.exitCode);
 }
 
@@ -126,11 +129,40 @@ export function priceFingerprint(quote) {
       quote: Object.fromEntries(Object.entries(quote.account_quote.quote).filter(([key]) => !['estimate_id', 'expires_at', 'assumptions'].includes(key))) } });
 }
 
+/**
+ * A balance below the estimate, in figures: what the estimate needs at most (the shared core compares the balance with
+ * the same upper end), the balance, the gap rounded up to 0.1 credit so topping up that much is enough, and the top-up link.
+ */
+export function balanceShortfall(quote) {
+  const needed = quote.estimate?.max_credits, balance = quote.balance_credits;
+  const short = Number.isFinite(needed) && Number.isFinite(balance)
+    ? Math.ceil(Number((Math.max(0, needed - balance) * 10).toFixed(6))) / 10 : undefined;
+  // Tagged as the CLI by hand: this runs outside a platform call, where the shared core's trackedLink would not know the caller.
+  return { needed, balance, short, topUp: withUtm(TOP_UP_URL, { source: 'cli', campaign: 'cli', content: 'top_up' }) };
+}
+
+function insufficientBalance(quote) {
+  const { needed, balance, short, topUp } = balanceShortfall(quote);
+  const figures = [
+    Number.isFinite(needed) && `it needs about ${money(needed)}`,
+    Number.isFinite(balance) && `the balance is ${money(balance)}`,
+    short !== undefined && `short by about ${money(short)}`,
+  ].filter(Boolean).join(', ');
+  return new CliError('insufficient_balance', `The EvoLink account balance does not cover this estimate${figures ? `: ${figures}` : ''}.`, {
+    ...(Number.isFinite(needed) ? { estimated_credits: needed } : {}),
+    ...(Number.isFinite(quote.estimate?.max_usd) ? { estimated_usd: quote.estimate.max_usd } : {}),
+    ...(Number.isFinite(balance) ? { balance_credits: balance } : {}),
+    ...(short !== undefined ? { short_by_credits: short } : {}),
+    top_up_url: topUp,
+    next_step: `Tell the user before asking for confirmation: they can top up at ${topUp}, or choose a cheaper option (a shorter output or a lower resolution).`,
+  });
+}
+
 export function checkEstimate(quote, cap) {
   requireThat(quote.input_valid !== false, 'invalid_input', 'The model input is invalid.', { problems: quote.problems });
   requireThat(quote.enough_limit !== false, 'insufficient_limit', 'The EvoLink MCP or API key spending limit does not cover this estimate. Adjust that limit; this is not the account balance.', { limit_scope: quote.limit_scope });
   requireThat(quote.enough_daily_limit !== false, 'insufficient_daily_limit', 'The daily spending limit does not cover this estimate. Wait for its reset or adjust that limit; this is not the account balance.');
-  requireThat(quote.enough_balance !== false, 'insufficient_balance', 'The EvoLink account balance does not cover this estimate.');
+  if (quote.enough_balance === false) throw insufficientBalance(quote);
   if (quote.estimate?.status === 'estimated' || quote.estimate?.status === 'token_billed' && quote.estimate.max_usd !== undefined) {
     const { min_usd, max_usd } = quote.estimate;
     requireThat(Number.isFinite(max_usd) && max_usd >= 0 && (min_usd === undefined || Number.isFinite(min_usd) && min_usd >= 0 && min_usd <= max_usd),

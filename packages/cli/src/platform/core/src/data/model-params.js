@@ -4,22 +4,27 @@ import { MODEL_PARAMS_JSON } from './model-params.generated.js';
 import { MODEL_PARAMS_OVERRIDES_JSON } from './model-params.overrides.generated.js';
 import { withModelConstraints } from './model-constraints.js';
 let index;
-let overrides;
+/** The docs version of each model refreshed on its own, which can be newer than the full index's. */
+const overrideMeta = new Map();
 function load() {
     if (!index) {
         index = JSON.parse(MODEL_PARAMS_JSON);
-        overrides = JSON.parse(MODEL_PARAMS_OVERRIDES_JSON);
-        Object.assign(index.models, overrides.models);
+        // Targeted refreshes, oldest first; each snapshot keeps the docs commit its models were generated from.
+        const stored = JSON.parse(MODEL_PARAMS_OVERRIDES_JSON);
+        for (const snapshot of 'snapshots' in stored ? stored.snapshots : [stored]) {
+            for (const [model, params] of Object.entries(snapshot.models)) {
+                index.models[model] = params;
+                overrideMeta.set(model, snapshot.meta);
+            }
+        }
         for (const model of Object.values(index.models))
             withModelConstraints(model);
     }
     return index;
 }
 export function modelParamsMeta(model) {
-    load();
-    if (model && overrides?.models[model])
-        return overrides.meta;
-    return load().meta;
+    const loaded = load();
+    return (model ? overrideMeta.get(model) : undefined) ?? loaded.meta;
 }
 export function allModelParams() {
     return Object.values(load().models);
