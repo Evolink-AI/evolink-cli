@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { modelParamsMeta } from '../data/model-params.js';
 import { pricedFromRule, resolveModel, suggestModels } from '../services/model-catalog.js';
 import { billedByMediaLength, formatPrice } from '../services/pricing-client.js';
-import { cachedPricingRules, getPricingRules } from '../services/pricing-rules-client.js';
+import { getPricingRules } from '../services/pricing-rules-client.js';
 import { accountRulesAccess, billingUsageHelp, tokenReferenceHelp } from '../services/pricing-rules-estimate.js';
 import { formatUsd } from '../services/error-handler.js';
 import { trackedLink } from '../services/utm.js';
@@ -41,16 +41,15 @@ export function describeParam(name, spec, indent = '') {
     return lines;
 }
 /**
- * The rules name the usage a total needs. With the account's own rule (`own`) its rates are named; otherwise only the
- * full list the catalog has just cached for the prices is read, so get_model asks the platform for nothing more;
- * without it, estimate_cost still reports missing usage itself.
+ * The rules name the usage a total needs. With the account's own rule (`own`) its rates are named; otherwise the
+ * catalog's own list (the account's prices or the public default ones, as the catalog says) is used, so get_model asks
+ * the platform for nothing more; without it, estimate_cost still reports missing usage itself.
  */
-function billingUsage(entry, own) {
-    const body = own ? undefined : cachedPricingRules({ view: 'full' });
-    const rule = own ?? (body && 'models' in body ? body.models.find(model => model.model_id === entry.id.toLowerCase()) : undefined);
-    const scope = own ? 'account' : 'public_default';
+function billingUsage(entry, catalog, own) {
+    const rule = own ?? catalog.rules?.find(model => model.model_id === entry.id.toLowerCase());
+    const ruleScope = own ? 'account' : catalog.pricingScope ?? 'public_default';
     return rule?.policy_source === 'published' && rule.pricing_status === 'available'
-        ? { usage: billingUsageHelp(rule, entry, scope), reference: tokenReferenceHelp(rule, entry, scope) } : { usage: [] };
+        ? { usage: billingUsageHelp(rule, entry, ruleScope), reference: tokenReferenceHelp(rule, entry, ruleScope) } : { usage: [] };
 }
 /**
  * The rule and unit prices this request's own account is billed for the model, when it carries a credential and the
@@ -155,9 +154,12 @@ export function registerGetModel(server, config) {
             else {
                 lines.push('', 'Parameters for this model are not documented here; the gateway checks the input when you submit.');
             }
-            lines.push('', `${own ? 'Your account\'s' : 'Public default'} component base prices (USD; 68 credits ≈ $1). Tiers, quantities and minimum charges affect totals; use estimate_cost with the actual input.`);
+            // The account's own rule when it was read; otherwise whatever the catalog's prices are (its list may be the
+            // account's own too).
+            const scope = own ? 'account' : catalog.pricingScope ?? 'public_default';
+            lines.push('', `${scope === 'account' ? 'Your account\'s' : 'Public default'} component base prices (USD; 68 credits ≈ $1). Tiers, quantities and minimum charges affect totals; use estimate_cost with the actual input.`);
             structured.pricing_source = 'pricing_rules';
-            structured.pricing_scope = own ? 'account' : 'public_default';
+            structured.pricing_scope = scope;
             if (priced && priced.prices.length > 0) {
                 const groups = [['output', 'Main charge'], ['add_on', 'Extra charges'], ['token', 'Usage-based']];
                 for (const [role, label] of groups) {
@@ -182,7 +184,7 @@ export function registerGetModel(server, config) {
             else {
                 lines.push(catalog.pricingWarning ?? 'Pricing data is unavailable in this catalog.');
             }
-            const { usage, reference } = billingUsage(entry, own?.rule);
+            const { usage, reference } = billingUsage(entry, catalog, own?.rule);
             if (usage.length) {
                 lines.push('Billing usage (estimate_cost needs these for a total and names any that are missing):', ...usage.map(line => `- ${line}`));
                 structured.billing_usage = usage;

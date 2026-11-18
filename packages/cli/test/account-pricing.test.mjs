@@ -1,6 +1,7 @@
 // Account prices through the CLI. Signed in, an estimate and the generation after it read the caller's own prices from
-// the API host with the login token (GET /v1/pricing-rules/{model}, price_scope "account"); `models pricing` stays the
-// public default rules and never sends a credential; a gateway without account prices quotes the public price as before;
+// the API host with the login token (GET /v1/pricing-rules/{model}, price_scope "account"); so do `models pricing` (one
+// model or a list, GET /v1/pricing-rules) and `models search`, while `models pricing` without a login reads the public
+// default rules and sends no credential; a gateway without account prices quotes the public price as before;
 // EVOLINK_MCP_ACCOUNT_PRICING=0 turns account prices off.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,11 +21,11 @@ const submissions = f => (f.restCalls ?? []).filter(call => call.method === 'POS
 
 test.beforeEach(() => { resetPricingRulesCacheForTests(); delete process.env.EVOLINK_MCP_ACCOUNT_PRICING; });
 
-async function context(t) {
+async function context(t, { signedIn = true } = {}) {
   const f = await fixture(); t.after(f.close); f.mcpUnavailable = true;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'evolink-account-pricing-')); t.after(() => fs.rm(home, { recursive: true, force: true }));
   const state = new State(home);
-  const client = new Api(new Credentials({ state, server: f.server, vault: new MemoryVault(), token }));
+  const client = new Api(new Credentials({ state, server: f.server, vault: new MemoryVault(), ...(signedIn ? { token } : {}) }));
   return { f, client, media: new Media({ client, state, server: f.server }) };
 }
 
@@ -41,14 +42,36 @@ test('signed in, an estimate is at the account\'s own price, read from the API h
   assert.equal(submissions(f), 0);
 });
 
-test('models pricing stays the public default rules and sends no credential', async t => {
+test('models pricing and models search are at the account\'s own rates when signed in', async t => {
   const { f, client } = await context(t);
   f.accountMultiplier = 0.75;
-  const rules = await client.call('get_pricing_rules', { model: 'fixture-image', view: 'full' });
-  assert.equal(rules.meta.price_scope, 'public_default');
-  assert.equal(rules.account_price, false);
-  assert.equal(rules.model.components[0].rate.uc, '13600');
-  assert.equal(f.accountReads?.length ?? 0, 0, 'the account route is never asked without a login');
+  const own = await client.call('get_pricing_rules', { model: 'fixture-image', view: 'full' });
+  assert.equal(own.meta.price_scope, 'account'); assert.equal(own.account_price, true); assert.equal(own.account_pricing, 'used');
+  assert.equal(own.model.components[0].rate.uc, '10200');
+  const list = await client.call('get_pricing_rules', { modality: 'image', view: 'summary' });
+  assert.equal(list.meta.price_scope, 'account'); assert.equal(list.pricing_endpoint, '/v1/pricing-rules');
+  assert.ok(list.models.length > 0 && list.models.every(model => model.modality === 'image'));
+  assert.equal(list.models.find(model => model.model_id === 'fixture-image').components[0].rate.uc, '10200');
+  const search = await client.call('search_models', { query: 'fixture', type: 'image' });
+  assert.equal(search.starting_price_scope, 'account'); assert.equal(search.account_pricing, 'used');
+  const accountCalls = f.restCalls.filter(call => call.path === '/v1/pricing-rules' || call.path.startsWith('/v1/pricing-rules/'));
+  assert.ok(accountCalls.length >= 3 && accountCalls.every(call => call.headers.authorization === `Bearer ${token}`),
+    'the login token goes to the API host for account prices');
+  assert.ok(f.restCalls.filter(call => call.path.startsWith('/v1/catalog/')).every(call => call.headers.authorization === undefined),
+    'never to the public catalog');
+});
+
+test('models pricing without a login reads the public default rules and sends no credential', async t => {
+  const { f, client } = await context(t, { signedIn: false });
+  f.accountMultiplier = 0.75;
+  for (const query of [{ model: 'fixture-image', view: 'full' }, { view: 'summary' }]) {
+    const rules = await client.call('get_pricing_rules', query);
+    assert.equal(rules.meta.price_scope, 'public_default');
+    assert.equal(rules.account_price, false); assert.equal('account_pricing' in rules, false);
+  }
+  const one = await client.call('get_pricing_rules', { model: 'fixture-image', view: 'full' });
+  assert.equal(one.model.components[0].rate.uc, '13600');
+  assert.equal((f.accountReads?.length ?? 0) + (f.accountListReads?.length ?? 0), 0, 'the account routes are never asked without a login');
   const reads = f.restCalls.filter(call => call.path.endsWith('/pricing-rules'));
   assert.ok(reads.length >= 1 && reads.every(call => call.headers.authorization === undefined), 'no credential on the public rules');
 });

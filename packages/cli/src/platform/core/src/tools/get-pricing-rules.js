@@ -9,12 +9,12 @@ import { failure, ok, READ_ONLY, retryText } from './shared.js';
 export function registerPricingRules(server, config) {
     server.registerTool('get_pricing_rules', {
         title: 'Read pricing rules',
-        description: 'Read schema-2 pricing rules, decimal-string rates including fractional UC, minimum charges, tiers and optional full expressions. Free. A list is always the public default rules (price_scope: public_default), read anonymously. With a model, a signed-in connection or API key gets the rates of its own account when the platform offers them (price_scope: account), otherwise the public default rates. Model IDs and published aliases are case-insensitive; results keep the canonical model_id and published aliases. The returned price_selection, when present, identifies route-priority prices or legacy minimum configuration prices. Coverage follows the returned published policies and supported legacy text adapters, including media when available. These are reference rates, not live availability, a task quote, a bill or a final spending cap; public default rates are not account prices. Do not substitute these rules for media estimate_cost or assume empty media results are free.',
+        description: 'Read schema-2 pricing rules, decimal-string rates including fractional UC, minimum charges, tiers and optional full expressions. Free. A signed-in connection or API key gets the rates of its own account, for one model or a list, when the platform offers them (price_scope: account); otherwise, and without a credential, the public default rates (price_scope: public_default). Model IDs and published aliases are case-insensitive; results keep the canonical model_id and published aliases. The returned price_selection, when present, identifies route-priority prices or legacy minimum configuration prices. Coverage follows the returned published policies and supported legacy text adapters, including media when available. These are reference rates, not live availability, a task quote, a bill or a final spending cap; public default rates are not account prices. Do not substitute these rules for media estimate_cost or assume empty media results are free.',
         inputSchema: PricingRulesQuery.shape,
         annotations: { title: 'Read pricing rules', ...READ_ONLY },
     }, async (input) => {
-        // One model can be read at the caller's own prices; a list is the public default rules.
-        const account = input.model ? accountRulesAccess(config) : undefined;
+        // One model or a list is read at the caller's own prices first, falling back to the public default rules.
+        const account = accountRulesAccess(config);
         // Only a lookup that reads the platform's rules counts; one answered from rules read moments ago does not.
         const over = config.reusePricingRules && reusablePricingRules(input, account) ? undefined : pricingCallLimitReached('get_pricing_rules');
         if (over)
@@ -37,7 +37,7 @@ export function registerPricingRules(server, config) {
                     ? 'These are the rates of your own account. Routed settlement and promotions can still change what a task is charged.'
                     : 'Public default configuration prices may differ from routed settlement, account-group prices, discounts and promotions.',
                 'No task quote or final spending cap was established. Do not multiply unit rates into a bill; minimum charges, tiers and rounding apply.',
-                'Coverage follows the models returned for this query. Empty results mean no matching public rules were returned, not zero cost.',
+                `Coverage follows the models returned for this query. Empty results mean no matching ${ownRates ? '' : 'public '}rules were returned, not zero cost.`,
             ];
             const fallbackNote = accountFallbackNote(fallback);
             if (fallbackNote)
@@ -56,7 +56,7 @@ export function registerPricingRules(server, config) {
                     lines.push(`- ${component.role}: ${component.rate.usd} USD (${component.rate.credits} credits) per ${component.billing_unit_size} ${component.unit === '1k_tokens' ? 'tokens' : component.unit}; minimum ${component.minimum_charge.usd} USD; ${component.tiers.length} tier(s); ${component.pricing_status}.`);
             }
             return ok(lines.join('\n'), { ...body, ...(input.model ? { requested_model: input.model } : {}), pricing_source: source,
-                pricing_endpoint: ownRates ? '/v1/pricing-rules/{model}' : '/v1/catalog/pricing-rules', quote_established: false, final_budget_enforced: false,
+                pricing_endpoint: ownRates ? (input.model ? '/v1/pricing-rules/{model}' : '/v1/pricing-rules') : '/v1/catalog/pricing-rules', quote_established: false, final_budget_enforced: false,
                 account_price: ownRates, ...accountPricingStatus(account, body.meta.price_scope, fallback), warnings });
         }
         catch (error) {

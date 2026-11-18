@@ -240,6 +240,9 @@ const mutants = [
   ['workflow-estimate-needs-plan', 'src/cli.mjs', "requireThat(options.seconds !== undefined && options.keyframes !== undefined, 'missing_option',", "requireThat(true, 'missing_option',"],
   ['workflow-analyze-needs-run', 'src/cli.mjs', "requireThat(options.run && options.step && options.purpose, 'missing_option',", "requireThat(true, 'missing_option',"],
   ['workflow-rate-limit-code', 'src/workflow.mjs', 'if (response.status === 429) {', 'if (false) {'],
+  // models pricing: signed in it reads the account's own rules; without a login it still reads the public ones.
+  ['account-pricing-models-pricing-anonymous', 'src/api.mjs', 'access ? this.context(access, name, deadline) :', 'false ? this.context(access, name, deadline) :'],
+  ['account-pricing-models-pricing-needs-login', 'src/api.mjs', 'catch (error) { if (this.signal?.aborted) throw error; }', 'catch (error) { throw error; }'],
 ];
 
 // Mutants of the update, login, local-wait and quote-refresh changes run only the test that covers them, which keeps the CI matrix fast.
@@ -315,6 +318,7 @@ for (const [name, file, before, after] of selected) {
       : name.startsWith('reference-') ? ['token-billed.test.mjs']
       : name.startsWith('workflow-') ? ['workflow.test.mjs']
       : name.startsWith('balance-short-') ? ['balance-shortfall.test.mjs']
+      : name.startsWith('account-pricing-') ? ['account-pricing.test.mjs']
       : ['media.test.mjs', 'auth.test.mjs', 'acceptance.test.mjs', 'readiness.test.mjs', 'setup.test.mjs', 'skills.test.mjs'];
     const tests = files.map(n => path.join(home, 'test', n));
     const selection = PATTERNS[name] ? [`--test-name-pattern=${PATTERNS[name]}`] : [];

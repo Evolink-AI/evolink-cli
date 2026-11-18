@@ -6,6 +6,7 @@ import { getAvailableModelIds } from './api-client.js';
 import { currentModels } from './catalog-client.js';
 import { closestMatches } from './param-validator.js';
 import { getPricingRules } from './pricing-rules-client.js';
+import { accountPricingStatus, accountRulesAccess, readAccountRulesFirst } from './pricing-rules-estimate.js';
 function isMediaKind(value) {
     return value === 'image' || value === 'video' || value === 'audio';
 }
@@ -46,9 +47,15 @@ export async function loadCatalog(config, pricingOptions = {}) {
     if (pricingOptions.skipPricing)
         return { entries: [...entries.values()] };
     let pricingWarning;
+    let priced = {};
     try {
-        const { body } = await getPricingRules({ view: 'full' }, { fresh: pricingOptions.fresh });
+        // Signed in (or with an API key), the list is read at the account's own prices first; when the platform does not
+        // serve them, or they cannot be read just now, the public default list is used and accountPricing says why.
+        const account = accountRulesAccess(config);
+        const { body, accountFallback } = await readAccountRulesFirst(account, from => getPricingRules({ view: 'full' }, { fresh: pricingOptions.fresh, ...(from ? { account: from } : {}) }));
         const rules = 'models' in body ? body.models : [body.model];
+        const { account_pricing: accountPricing } = accountPricingStatus(account, body.meta.price_scope, accountFallback);
+        priced = { pricingScope: body.meta.price_scope, rules, ...(accountPricing ? { accountPricing } : {}) };
         // Rules left out of the list only matter here when they belong to a model this catalog shows.
         const rejected = new Set(('models' in body ? body.rejected_models ?? [] : []).map(id => id.toLowerCase()));
         const unreadable = [];
@@ -68,7 +75,7 @@ export async function loadCatalog(config, pricingOptions = {}) {
     catch (error) {
         pricingWarning = `Prices are unavailable right now (${error instanceof Error ? error.message : 'unknown error'}).`;
     }
-    return { entries: [...entries.values()], pricingWarning };
+    return { entries: [...entries.values()], pricingWarning, ...priced };
 }
 export function findEntry(catalog, id) {
     const lower = id.trim().toLowerCase();

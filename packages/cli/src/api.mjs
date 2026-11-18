@@ -33,9 +33,14 @@ export class Api {
     if (requireCapability) requireThat(this.platform.supports(name, requiredInputs),
       'capability_unavailable', 'This CLI does not contain the requested platform capability. Update the CLI; no request was sent.',
       { tool: name, required_inputs: requiredInputs, request_sent: false });
-    // Public configuration rules do not require login, refresh or key access.
+    // Pricing rules do not require login. Signed in (or with --token-stdin) they are read at the account's own rates,
+    // which the platform replaces with the public default ones by itself when the gateway does not serve them;
+    // without a usable login (none saved, no keyring, a renewal that failed) they are the public default rules, read
+    // anonymously, as before account prices existed.
     if (name === 'get_pricing_rules') {
-      const result = await this.platform.call(name, args, { clientName: 'EvoLink CLI', linkCampaign: 'cli',
+      let access;
+      try { access = await this.credentials.access(false, { deadline }); } catch (error) { if (this.signal?.aborted) throw error; }
+      const result = await this.platform.call(name, args, access ? this.context(access, name, deadline) : { clientName: 'EvoLink CLI', linkCampaign: 'cli',
         http: { fetch: this.fetchFn, signal: this.signal, userAgent: USER_AGENT, client: 'cli',
           version: CLI_VERSION, controlBaseUrl: this.apiUrl.origin },
       });

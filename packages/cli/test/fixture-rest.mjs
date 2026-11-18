@@ -52,6 +52,16 @@ export async function restFixture(state, req, res, url, body, send) {
     }
     send(200, { meta: pricingMeta('account', state.accountMultiplier), model: pricingRule(decodeURIComponent(own), state.accountMultiplier) }); return true;
   }
+  // The list at the caller's own prices, answered the same way.
+  if (url.pathname === '/v1/pricing-rules') {
+    (state.accountListReads ??= []).push({ authorization: req.headers.authorization, view: url.searchParams.get('view') });
+    if (!state.accountMultiplier || !req.headers.authorization?.startsWith('Bearer ')) {
+      send(404, { error: { message: `Invalid URL (GET ${url.pathname})`, type: 'invalid_request_error', param: '', code: '' } }); return true;
+    }
+    const modality = url.searchParams.get('modality');
+    send(200, { meta: pricingMeta('account', state.accountMultiplier),
+      models: models.filter(id => !modality || kind(id) === modality).map(id => pricingRule(id, state.accountMultiplier)) }); return true;
+  }
   if (url.pathname.endsWith('/pricing-rules')) {
     state.ruleReads = (state.ruleReads || 0) + 1;
     // Tests may hold an estimate here to open a race window.
