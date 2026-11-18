@@ -7,7 +7,7 @@ import { parseBatchTasks } from '../services/task-response.js';
 import { monotonicNow } from '../services/http-policy.js';
 import { DASHBOARD_CHECK_GUIDANCE, READ_ONLY, dashboardCheck, errorResult, errorSummary, failure, money, ok, usdOf } from './shared.js';
 import { TASK_ID } from './get-task.js';
-import { RESULT_DELIVERY_GUIDANCE, RESULT_DELIVERY_INSTRUCTIONS, RESULT_LINK_HOURS, resultDeliveryMarkdown, resultLinks, resultResources, taskOutputs } from './task-format.js';
+import { RESULT_DELIVERY_GUIDANCE, RESULT_DELIVERY_INSTRUCTIONS, RESULT_LINK_DAYS, resultDeliveryMarkdown, resultLinks, resultResources, taskOutputs } from './task-format.js';
 const MAX_IDS = 50;
 /** The verified base page answers a list; the optional detail read (result links, error codes) gets at most this long. */
 const DETAILS_BUDGET_MS = 15_000;
@@ -119,7 +119,7 @@ export function registerListTasks(server, config) {
                 if (websiteCheck)
                     lines.push(DASHBOARD_CHECK_GUIDANCE);
                 if (rows.some(row => row.results))
-                    lines.push(`Result links expire after ${RESULT_LINK_HOURS} hours.`);
+                    lines.push(`Result links expire after ${RESULT_LINK_DAYS} days.`);
                 if (rows.some(row => row.results))
                     lines.push(`Next step: ${RESULT_DELIVERY_INSTRUCTIONS}`);
                 return ok(lines.join('\n'), { tasks: rows, missing, partial: missing.length > 0 || tasks.issues.length > 0, issues: tasks.issues,
@@ -225,7 +225,7 @@ export function registerListTasks(server, config) {
                 lines.push(`Page ${page.page} is past the last page (${lastPage}) of ${page.total} tasks; use pages 1–${lastPage}.`);
             lines.push(`Page ${page.page}; ${page.total} tasks before page-local time filtering.${nextPage ? ` Continue with page ${nextPage}.` : ''}`);
             if (rows.some(row => row.results))
-                lines.push(`Result links expire after ${RESULT_LINK_HOURS} hours.`);
+                lines.push(`Result links expire after ${RESULT_LINK_DAYS} days.`);
             if (rows.some(row => row.results))
                 lines.push(`Next step: ${RESULT_DELIVERY_INSTRUCTIONS}`);
             return ok(lines.join('\n'), { tasks: rows, total: page.total, page: page.page, page_size: page.page_size,

@@ -26,7 +26,7 @@ export function registerGetTask(server, config) {
         title: 'Get task status and results',
         description: [
             'Check one generation task and, while it is still running, wait up to wait_seconds (max 45) for it to finish. Free.',
-            'Returns the status, progress, result links (they expire after 24 hours, so give them to the user right away), the final charge, or the error with a next step.',
+            'Returns the status, progress, result links (they expire after 7 days; give them to the user right away), the final charge, or the error with a next step.',
             'If the task is still running when this returns, call get_task again. wait_seconds bounds the whole call, including retries; stopping a wait never cancels the task.',
             'Invalid bodies, mismatched IDs and unknown states return a query error with the original task ID and status_check unverified. Retry the free query; do not infer generation failure, zero charge or a refund. Missing optional fields are not zero. Completed resource tasks may return voice/persona IDs without links.',
             'Never call generate_image, generate_video or generate_audio again to check progress: that creates and charges a new task.',

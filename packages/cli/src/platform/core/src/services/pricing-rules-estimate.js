@@ -430,6 +430,55 @@ function economicRules(rule) {
     return { ...economic, components: rule.components.map(({ effective_at, official_rate, ...c }) => ({ ...c,
             tiers: c.tiers.map(({ effective_at, official_rate, ...t }) => t) })) };
 }
+/**
+ * The pricing parameters that change what is priced. A value that the generation input, a default or the service
+ * gives anyway is left out, so passing back the pricing_parameters an estimate showed is the same request. When the
+ * parameters cannot be resolved without the given ones, every given one counts.
+ */
+export function explicitPricingParameters(rule, entry, input, pricingParameters, mediaSeconds) {
+    const given = Object.entries(pricingParameters ?? {}).filter(([, value]) => value !== undefined);
+    if (!given.length)
+        return {};
+    let resolved;
+    try {
+        resolved = prepareQuoteParameters(rule, entry, input, {}, mediaSeconds, true);
+    }
+    catch {
+        return Object.fromEntries(given);
+    }
+    return Object.fromEntries(given.filter(([name, value]) => resolved[name] === undefined || String(resolved[name]) !== String(value)));
+}
+const isAutoDuration = (node) => {
+    const n = node;
+    return n?.op === 'eq' && Array.isArray(n.args) && n.args.length === 2
+        && n.args.some(arg => arg.op === 'variable' && arg.name === 'duration')
+        && n.args.some(arg => arg.op === 'constant' && String(arg.value) === '-1');
+};
+/** Whether the rule reads duration_seconds anywhere but in the branch for an automatic duration (duration = -1). */
+function readsDurationSecondsOutsideAuto(node, auto = false) {
+    if (Array.isArray(node))
+        return node.some(item => readsDurationSecondsOutsideAuto(item, auto));
+    if (!node || typeof node !== 'object')
+        return false;
+    const n = node;
+    if (n.op === 'variable' && n.name === 'duration_seconds')
+        return !auto;
+    if (n.op === 'if' && Array.isArray(n.args) && n.args.length === 3 && isAutoDuration(n.args[0])) {
+        return readsDurationSecondsOutsideAuto(n.args[1], true) || readsDurationSecondsOutsideAuto(n.args[2], auto);
+    }
+    return Object.values(n).some(value => readsDurationSecondsOutsideAuto(value, auto));
+}
+/**
+ * The parameters an estimate shows. A rule that reads duration_seconds only for an automatic duration (Seedance 2.5:
+ * duration -1) does not use its default (30) for a set duration, so it is not shown then.
+ */
+export function shownQuoteParameters(rule, params) {
+    if (!('duration_seconds' in params) || params.duration === undefined || String(params.duration) === '-1')
+        return params;
+    if (readsDurationSecondsOutsideAuto(rule.components))
+        return params;
+    return Object.fromEntries(Object.entries(params).filter(([name]) => name !== 'duration_seconds'));
+}
 /** countPromptTokens replaces the approximate prompt token count, for comparing with the gateway's exact count. */
 export function calculateRulesEstimate(body, entry, input, options = {}) {
     const rule = 'model' in body ? body.model : body.models.find(model => model.model_id === entry.id);
@@ -488,7 +537,15 @@ export function calculateRulesEstimate(body, entry, input, options = {}) {
             missing.add(name);
         components.length = 0;
     }
-    const amounts = amountsForUC(String(total)), requestHash = quoteRequestHash(entry.id, effectiveInput, options.mediaSeconds, pricingParameters);
+    const amounts = amountsForUC(String(total));
+    // The pricing_parameters an estimate showed, passed back to generate_*, change nothing: only values that alter what
+    // is priced count. The hash over every given parameter (what 1.13.0 and earlier issued) is still accepted.
+    const explicit = explicitPricingParameters(rule, entry, effectiveInput, pricingParameters, options.mediaSeconds);
+    const requestHash = quoteRequestHash(entry.id, effectiveInput, options.mediaSeconds, explicit);
+    const requestHashes = { exact: quoteRequestHash(entry.id, effectiveInput, options.mediaSeconds, pricingParameters),
+        withoutPricingParameters: quoteRequestHash(entry.id, effectiveInput, options.mediaSeconds, {}),
+        // Each explicit parameter left out in turn: an approval matching one was estimated without that parameter.
+        withoutEach: Object.fromEntries(Object.keys(explicit).map(name => [name, quoteRequestHash(entry.id, effectiveInput, options.mediaSeconds, Object.fromEntries(Object.entries(explicit).filter(([key]) => key !== name)))])) };
     const approval = { source: 'pricing_rules', price_scope: 'public_default', model_id: entry.id,
         request_hash: requestHash, total_uc: amounts.uc, expires_at: new Date(Date.now() + APPROVAL_TTL_MS).toISOString(),
         fingerprint: quoteRequestHash(entry.id, { rules: economicRules(rule), parameters: params,
@@ -555,7 +612,7 @@ export function calculateRulesEstimate(body, entry, input, options = {}) {
             estimate.notes.push(`${label} is enabled. ${assumption} Each actual search costs ${search.unit_price_amounts.credits} credits (approximately $${search.unit_price_amounts.usd}) at public default rates. A single task may perform no searches or multiple searches. Actual search count and search fees are unknown before generation and depend on the task and the model's search strategy.`);
         }
     }
-    return { approval, estimate, amounts, components, parameters: params, rule };
+    return { approval, estimate, amounts, components, parameters: params, shownParameters: shownQuoteParameters(rule, params), requestHashes, rule };
 }
 /** While the platform limits pricing requests, an estimate may use rules read this recently; generation never does. */
 export const RECENT_RULES_MAX_AGE_MS = 10 * 60_000;
@@ -629,6 +686,11 @@ export const approvalExpired = (approval, now = Date.now()) => Date.parse(approv
  * partial estimate's total is the part it prices.
  */
 export const priceRose = (approval, fresh) => BigInt(fresh.total_uc) > BigInt(approval.total_uc);
+/** Said when the approval matches this request without its pricing_parameters: the estimate was made without them. */
+export const PRICING_PARAMETERS_NOT_ESTIMATED = 'The approved estimate was made without these pricing_parameters. Submit again with the same input and pricing_quote and without pricing_parameters: that is the request the user approved.';
+/** Said when the approval matches this request without one of its pricing_parameters. */
+export const pricingParameterNotEstimated = (name) => `The approved estimate was made without pricing_parameters.${name}. Submit again without it, with the same input and pricing_quote: that is the request the user approved.`;
+export const QUOTE_INPUT_CHANGED = 'The generation input, media_seconds or pricing_parameters differ from the approved estimate. Pass exactly what was given to estimate_cost (pricing_parameters only if it was given some), or estimate this request again and obtain approval.';
 /**
  * An approval holds for the same input until its expires_at, at the approved price or lower. A changed input
  * (quote_input_changed), an expired approval (quote_expired) or a higher price (price_changed) needs a new estimate and
@@ -638,8 +700,17 @@ export function checkRulesApproval(approval, fresh) {
     if (approval.batch_items !== undefined) {
         fail('quote_input_changed', 'This pricing_quote approves a batch (inputs); pass the same inputs, or estimate this input and obtain approval.');
     }
-    if (approval.request_hash !== fresh.approval.request_hash || approval.model_id !== fresh.approval.model_id) {
-        fail('quote_input_changed', 'The generation input differs from the approved estimate.');
+    const sameRequest = approval.request_hash === fresh.approval.request_hash || approval.request_hash === fresh.requestHashes.exact;
+    if (!sameRequest || approval.model_id !== fresh.approval.model_id) {
+        if (approval.model_id === fresh.approval.model_id) {
+            if (approval.request_hash === fresh.requestHashes.withoutPricingParameters) {
+                throw new QuoteError('quote_input_changed', PRICING_PARAMETERS_NOT_ESTIMATED, 'pricing_parameters', 'caller');
+            }
+            const added = Object.entries(fresh.requestHashes.withoutEach).find(([, hash]) => hash === approval.request_hash)?.[0];
+            if (added)
+                throw new QuoteError('quote_input_changed', pricingParameterNotEstimated(added), 'pricing_parameters', 'caller');
+        }
+        fail('quote_input_changed', QUOTE_INPUT_CHANGED);
     }
     if (approvalExpired(approval))
         fail('quote_expired', `The approved estimate expired at ${approval.expires_at}. Estimate again and obtain approval.`);

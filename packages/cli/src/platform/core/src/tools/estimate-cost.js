@@ -108,7 +108,7 @@ export function registerEstimateCost(server, config) {
                 total_known: estimate.total_known === true,
                 ...(estimate.missing_usage ? { missing_usage: estimate.missing_usage } : {}),
                 components: rulesEstimate.components,
-                pricing_parameters: rulesEstimate.parameters,
+                pricing_parameters: rulesEstimate.shownParameters,
                 policy_version: rulesEstimate.rule.policy_version,
                 policy_checksum: rulesEstimate.rule.policy_checksum,
                 settlement_basis: rulesEstimate.rule.settlement_basis,

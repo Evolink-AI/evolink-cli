@@ -3,7 +3,7 @@
 import { ApiHttpError, submitTask } from './api-client.js';
 import { remainingMs } from './http-policy.js';
 import { QuoteError, quoteRequestHash } from './pricing-quote-client.js';
-import { APPROVAL_TTL_MS, MAX_BATCH_ITEMS, amountsForUC, approvalExpired, priceRose } from './pricing-rules-estimate.js';
+import { APPROVAL_TTL_MS, MAX_BATCH_ITEMS, PRICING_PARAMETERS_NOT_ESTIMATED, amountsForUC, approvalExpired, priceRose, pricingParameterNotEstimated } from './pricing-rules-estimate.js';
 export { MAX_BATCH_ITEMS };
 /** Submissions of one batch in flight at once. */
 export const BATCH_SUBMIT_CONCURRENCY = 10;
@@ -49,18 +49,34 @@ export function batchTotal(model, items) {
         notes: unique(items.flatMap(item => item.estimate.notes)),
         ...(missing.length ? { uncheckable_reason: 'usage', missing_usage: missing,
             usage_help: unique(items.flatMap(item => item.estimate.usage_help ?? [])) } : {}) };
-    return { status, amounts, approval, estimate, partial, needsInput };
+    // As for one input: the hash over every given pricing parameter (issued up to 1.13.0) still holds, and one without
+    // pricing_parameters tells an added set apart from a changed input.
+    const requestHashes = {
+        exact: quoteRequestHash(model, { batch: items.map(item => item.requestHashes?.exact ?? item.approval.request_hash) }),
+        withoutPricingParameters: quoteRequestHash(model, { batch: items.map(item => item.requestHashes?.withoutPricingParameters ?? item.approval.request_hash) }),
+        withoutEach: Object.fromEntries([...new Set(items.flatMap(item => Object.keys(item.requestHashes?.withoutEach ?? {})))].map(name => [name, quoteRequestHash(model, { batch: items.map(item => item.requestHashes?.withoutEach?.[name] ?? item.approval.request_hash) })])),
+    };
+    return { status, amounts, approval, estimate, partial, needsInput, requestHashes };
 }
 function fail(code, message) { throw new QuoteError(code, message); }
 /**
  * A batch approval holds for the same inputs, in the same order, until its expires_at, at the approved total or lower:
  * the total counts, not any one input's price. An approval of one input never approves a batch.
  */
-export function checkBatchApproval(approval, fresh) {
+export function checkBatchApproval(approval, fresh, hashes = {}) {
     if (approval.batch_items === undefined) {
         fail('quote_input_changed', 'This pricing_quote approves one input; estimate these inputs together (inputs) and obtain approval.');
     }
-    if (approval.batch_items !== fresh.batch_items || approval.request_hash !== fresh.request_hash || approval.model_id !== fresh.model_id) {
+    const sameRequest = approval.request_hash === fresh.request_hash || approval.request_hash === hashes.exact;
+    if (approval.batch_items !== fresh.batch_items || !sameRequest || approval.model_id !== fresh.model_id) {
+        if (approval.batch_items === fresh.batch_items && approval.model_id === fresh.model_id) {
+            if (approval.request_hash === hashes.withoutPricingParameters) {
+                throw new QuoteError('quote_input_changed', PRICING_PARAMETERS_NOT_ESTIMATED.replace('the same input', 'the same inputs'), 'pricing_parameters', 'caller');
+            }
+            const added = Object.entries(hashes.withoutEach ?? {}).find(([, hash]) => hash === approval.request_hash)?.[0];
+            if (added)
+                throw new QuoteError('quote_input_changed', pricingParameterNotEstimated(added).replace('the same input', 'the same inputs'), 'pricing_parameters', 'caller');
+        }
         fail('quote_input_changed', 'The inputs differ from the approved batch estimate (the same inputs, in the same order).');
     }
     if (approvalExpired(approval)) {
