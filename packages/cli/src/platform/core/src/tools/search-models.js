@@ -42,12 +42,25 @@ export function scoreModel(entry, terms) {
     }
     return total;
 }
+/** Whose rates a catalog's starting prices are, for search and recommendation results. */
+export function startingPriceScope(catalog) {
+    return { starting_price_scope: catalog.pricingScope ?? 'public_default',
+        ...(catalog.accountPricing ? { account_pricing: catalog.accountPricing } : {}) };
+}
+/** The sentence that says whose rates the starting prices are. */
+export function startingPricesNote(catalog) {
+    if (catalog.pricingScope === 'account')
+        return 'Starting prices are your account\'s own rates.';
+    if (catalog.accountPricing === 'unavailable')
+        return 'Your account\'s own prices could not be read just now, so starting prices are public default rates; get_model and estimate_cost read your account\'s rates again.';
+    return 'Starting prices are public default rates; get_model and estimate_cost use your account\'s rates when the platform offers them.';
+}
 export function registerSearchModels(server, config) {
     server.registerTool('search_models', {
         title: 'Search models',
         description: [
             'Find EvoLink image, video and audio models by type and keywords. Free.',
-            'Returns model IDs with a starting price; call get_model for a model\'s parameters and full pricing before generating.',
+            'Returns model IDs with a starting price, at the rates of the signed-in or API-key account when the platform offers them (starting_price_scope: account), otherwise at public default rates; call get_model for a model\'s parameters and full pricing before generating.',
             'Prices are in USD (68 credits ≈ $1).',
             MODEL_SELECTION_GUIDANCE,
         ].join(' '),
@@ -100,7 +113,7 @@ export function registerSearchModels(server, config) {
             if (matches.length === 0)
                 lines.push('No model matched. Try fewer or broader keywords, or type "all".');
             else
-                lines.push('', 'Next: compare suitable models with get_model. Keyword relevance comes first; platform preferences break ties after price availability. Search order is not a quality or popularity ranking, and a unit starting price is not the task total.');
+                lines.push('', `Next: compare suitable models with get_model. Keyword relevance comes first; platform preferences break ties after price availability. Search order is not a quality or popularity ranking, and a unit starting price is not the task total. ${startingPricesNote(catalog)}`);
             if (catalog.pricingWarning)
                 lines.push(`Note: ${catalog.pricingWarning}`);
             return ok(lines.join('\n'), {
@@ -108,6 +121,7 @@ export function registerSearchModels(server, config) {
                 total_matches: matches.length,
                 page, page_size: limit, next_page: page * limit < matches.length ? page + 1 : null,
                 availability_source: 'live_catalog_and_health', ordering: 'keyword_relevance_then_price_availability_then_platform_preference_then_id',
+                ...startingPriceScope(catalog),
                 ...(catalog.pricingWarning ? { pricing_warning: catalog.pricingWarning } : {}),
             });
         }

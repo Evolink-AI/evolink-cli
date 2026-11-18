@@ -18,7 +18,7 @@ rate for each enabled search type. One task may perform no searches or multiple
 searches; expected counts are assumptions, not execution limits. Other unknown
 usage, including text/thinking tokens, remains excluded from a partial subtotal.
 
-Estimates use the two published full pricing-rules endpoints and exact UC arithmetic, including resolution, tiers, minimum charges and rounding. Public default prices exclude personal discounts. A failed refresh cannot authorize a new submission. Final settlement caps still require GroAPI/Worker enforcement; responses report `final_budget_enforced: false`.
+Estimates evaluate the published full pricing rules with exact UC arithmetic, including resolution, tiers, minimum charges and rounding. Signed in, they are at your account's own rates when the platform offers them (`pricing_scope: account`, read from `GET /v1/pricing-rules/{model}`); otherwise at public default prices, which exclude personal discounts (`pricing_scope: public_default`). `models pricing`, `models search` and `models show` follow the same rule; `models pricing` also works without login and then reads the public default rules. A failed refresh cannot authorize a new submission. Final settlement caps still require GroAPI/Worker enforcement; responses report `final_budget_enforced: false`.
 
 ## Status and installation
 

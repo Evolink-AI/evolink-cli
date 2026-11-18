@@ -17,8 +17,9 @@ The default flow shows the estimated cost and asks for approval; it creates no s
 A final task/workflow cap requires server-side reservation and settlement enforcement with an authoritative quote and ledger. This client cannot create that guarantee by polling, summing history or stopping local waiting. Do not label this version as supporting final settlement budgets or downloadable invoices.
 
 
-Estimates use published full pricing rules and show public default prices, excluding
-personal discounts. Local approvals are current for up to 24 hours from the estimate; submission verifies fresh rules: the same input at the approved price or lower submits, while a higher price, a changed input or an expired approval needs a new estimate and approval.
+Estimates use published full pricing rules at the signed-in account's own rates when the
+platform offers them (`pricing_scope: account`); otherwise they show public default prices,
+excluding personal discounts. Local approvals are current for up to 24 hours from the estimate; submission verifies fresh rules: the same input at the approved price or lower submits, while a higher price, a changed input or an expired approval needs a new estimate and approval.
 Use `evolink estimate --refresh-quote ID` only for an unsubmitted approval; preserve
 the input and explicit user budget and obtain approval again. The refreshed quote
 replaces the old one and keeps its request ID: submit only the newest quote, which

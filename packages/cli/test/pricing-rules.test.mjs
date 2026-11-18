@@ -81,7 +81,8 @@ test('seed 20261009: pricing command preserves all filters and rejects unrelated
     assert.throws(() => validateCommand(['models', 'pricing'], options));
   }
   const reference = commandHelp(['models', 'pricing']); assert.equal(reference.options.view.default, 'full');
-  assert.match(reference.description, /not account prices, quotes, bills or final spending caps/);
+  assert.match(reference.description, /no login needed\. Signed in, they are at your account's own rates when the platform offers them \(price_scope: account\); otherwise the public default rules\./);
+  assert.match(reference.description, /not quotes, bills or final spending caps/);
 });
 
 test('installed command reads anonymous rules with no keyring, and invalid filters send no request', async t => {
