@@ -57,7 +57,7 @@ Never ask for credentials in chat, read other applications' tokens, or use API k
 
 ## Workflows
 
-When the user asks to rebuild, remake or clone a reference ad with their own product and creator, read [Ad rebuild workflow](references/ad-rebuild.md) first and follow it. Its step-by-step rules come from EvoLink after login: fetch them with `evolink workflow rules ad-rebuild --json`, section by section, and do not improvise the steps. It asks the user to confirm one estimated total (`evolink workflow estimate`) instead of each quote; that confirmation covers the quotes inside the total. `evolink video analyze` is paid and belongs to a workflow step; do not use it for other media analysis.
+When the user asks to rebuild, remake or clone a reference ad with their own product and creator, read [Ad Rebuild workflow](references/ad-rebuild.md) first and follow it. Its step-by-step rules come from EvoLink after login: fetch them with `evolink workflow rules ad-rebuild --json`, section by section, and do not improvise the steps. It asks the user to confirm one estimated total (`evolink workflow estimate`) instead of each quote; that confirmation covers the quotes inside the total. `evolink video analyze` is paid and belongs to a workflow step; do not use it for other media analysis.
 
 ## Prepare and quote
 

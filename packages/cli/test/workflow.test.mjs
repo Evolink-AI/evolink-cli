@@ -399,5 +399,5 @@ test('command shapes, help and the bundled skill agree on the workflow commands'
   const installed = await installSkill({ home, agent: 'codex' });
   const directory = path.dirname(installed.path);
   assert.equal(await fs.readFile(path.join(directory, 'references/ad-rebuild.md'), 'utf8'), page);
-  assert.match(await fs.readFile(installed.path, 'utf8'), /\[Ad rebuild workflow\]\(references\/ad-rebuild\.md\)/);
+  assert.match(await fs.readFile(installed.path, 'utf8'), /\[Ad Rebuild workflow\]\(references\/ad-rebuild\.md\)/);
 });

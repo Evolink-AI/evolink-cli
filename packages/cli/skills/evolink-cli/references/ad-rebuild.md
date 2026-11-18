@@ -1,6 +1,8 @@
-# Ad rebuild workflow
+# Ad Rebuild workflow
 
 Rebuild a reference ad as a new ad with the user's own product and creator. The structure, hook and rhythm stay; the person, product, room, words and music are new. The result is one finished vertical video with sound, generated in a single video task and delivered with a keyframe contact sheet, a verdict for every shot and the total cost.
+
+Name it Ad Rebuild when you speak English with the user and 广告复刻 when you speak Chinese, and keep one name for the whole conversation. The user's source video is the reference ad; it is not what this workflow is called.
 
 This page is only the entry point. EvoLink sends the working rules for each step after login. Fetch them with `evolink workflow rules ad-rebuild --json` and follow them; do not improvise the steps from this page.
 
