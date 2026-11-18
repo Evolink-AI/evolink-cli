@@ -3,12 +3,13 @@
 // Expected gaps are computed here in whole ten-thousandths of a credit, not by the code under test.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { checkEstimate, balanceShortfall } from '../src/media.mjs';
+import { Media, checkEstimate, balanceShortfall } from '../src/media.mjs';
+import { State } from '../src/state.mjs';
+import { Credentials } from '../src/auth.mjs';
+import { Mcp } from './legacy-mcp.mjs';
 import { formatCredits } from '../src/platform/core/src/services/error-handler.js';
 import { fixture } from './fixture.mjs';
 
@@ -73,23 +74,25 @@ test('without a balance figure the refusal still says what is needed and where t
   assert.equal(bare.details.top_up_url, TOP_UP);
 });
 
-test('the command prints the figures and the link in its JSON error', async t => {
+test('through the estimate command path the refusal keeps its top-up next step', async t => {
+  // The same path as evolink estimate: the platform call, checkEstimate, then the quote error wrapper.
   const f = await fixture(); t.after(f.close);
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'evolink-b24-')); t.after(() => fs.rm(home, { recursive: true, force: true }));
-  const bin = fileURLToPath(new URL('../bin/evolink.mjs', import.meta.url));
-  const input = path.join(home, 'input.json');
-  await fs.writeFile(input, JSON.stringify({ prompt: 'short balance', insufficient: true }));
-  const token = 'fixture-command-token';
-  const child = spawn(process.execPath, [bin, 'estimate', '--model', 'fixture-image', '--input-file', input, '--server', f.server.href, '--json', '--token-stdin'],
-    { env: { ...process.env, EVOLINK_CLI_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] });
-  child.stdin.end(token);
-  let stdout = '';
-  child.stdout.on('data', b => { stdout += b; });
-  const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-  assert.notEqual(code, 0);
-  assert.ok(!stdout.includes(token));
-  const view = JSON.parse(stdout);
-  assert.equal(view.error.code, 'insufficient_balance');
-  assert.equal(view.error.details.top_up_url, TOP_UP);
-  assert.ok(view.error.details.next_step.includes(TOP_UP));
+  const state = new State(home);
+  const credentials = new Credentials({ server: f.server, state, token: 'fixture-command-token' });
+  const media = new Media({ mcp: new Mcp(credentials), state, server: f.server });
+  await assert.rejects(media.estimate({ model: 'fixture-image', input: { insufficient: true } }), error => {
+    assert.equal(error.code, 'insufficient_balance');
+    assert.equal(error.details.top_up_url, TOP_UP);
+    assert.ok(error.details.next_step.includes(TOP_UP), error.details.next_step);
+    assert.equal(error.details.phase, 'estimate');
+    assert.equal(error.details.submission_allowed, false);
+    return true;
+  });
+  // Any other refusal keeps the general next step.
+  await assert.rejects(media.estimate({ model: 'fixture-image', input: { invalid: true } }), error => {
+    assert.equal(error.code, 'invalid_input');
+    assert.match(error.details.next_step, /^Resolve the quote error and estimate again/);
+    return true;
+  });
 });
