@@ -6,6 +6,10 @@ import { controlBaseURL } from './pricing-client.js';
 import { DEFAULT_READ_TIMEOUT_MS, evoHeaders, fetchWithTimeout, timeoutFromEnv } from './http-policy.js';
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_CACHE_ENTRIES = 64;
+// Account prices: one entry per account and model, a few KB each, kept apart from the public entries.
+const MAX_ACCOUNT_CACHE_ENTRIES = 2_000;
+// How long a gateway that said it does not serve account prices is not asked again.
+const ACCOUNT_PRICES_RECHECK_MS = 60_000;
 const CACHE_TTL_MS = 60_000;
 // Media policies nest arrays and lookup keys around their expressions. Keep
 // bounded JSON traversal while allowing the published schema's deeper trees.
@@ -80,7 +84,7 @@ const Model = z.object({
     components: z.array(Component).min(1).max(200),
 });
 const Meta = z.object({ schema_version: z.literal('2'), catalog_version: z.string().min(1).max(128),
-    pricing_version: z.string().min(1).max(128), price_scope: z.literal('public_default'), currency: z.literal('USD'),
+    pricing_version: z.string().min(1).max(128), price_scope: z.enum(['public_default', 'account']), currency: z.literal('USD'),
     price_selection: z.enum(['configured_minimum', 'route_priority']).optional(),
     exchange_rate_version: z.literal('pricing-fx/v1:USD-CNY=6.8'),
     updated_at: z.string().datetime({ offset: true }), fresh_until: z.string().datetime({ offset: true }),
@@ -89,7 +93,12 @@ const Meta = z.object({ schema_version: z.literal('2'), catalog_version: z.strin
 const Envelope = z.object({ meta: Meta, models: z.array(z.unknown()).max(1000) });
 const Single = z.object({ meta: Meta, model: Model });
 const cache = new Map();
+const accountCache = new Map();
+/** Gateways that answered that they do not serve account prices, and until when they are not asked again. */
+const accountPricesNotOffered = new Map();
 const pending = new Map();
+/** Public rules and each account's own prices never share a cache. */
+const cacheOf = (account) => account ? accountCache : cache;
 export class PricingRulesError extends Error {
     code;
     status;
@@ -119,13 +128,18 @@ function rejectedName(raw, index) {
  * Bounds, metadata and freshness apply to the whole response and fail closed. In a list, a model whose rules
  * cannot be read is left out and named in `rejected_models`; the list fails only when no model is readable.
  * A single-model response fails when its model cannot be read.
+ *
+ * `scope` is the price scope that was asked for. A response of the other scope fails: public rules are never taken
+ * for an account's prices, nor an account's prices for the public ones.
  */
-export function validatePricingRules(body, single) {
+export function validatePricingRules(body, single, scope = 'public_default') {
     if (!bounded(body))
         throw new PricingRulesError('invalid_pricing_rules');
     const parsed = (single ? Single : Envelope).safeParse(body);
     if (!parsed.success)
         throw new PricingRulesError('invalid_pricing_rules');
+    if (parsed.data.meta.price_scope !== scope)
+        throw new PricingRulesError('mismatched_pricing_rules');
     if (Date.parse(parsed.data.meta.fresh_until) <= Date.now())
         throw new PricingRulesError('expired_pricing_rules');
     if ('model' in parsed.data)
@@ -200,15 +214,30 @@ async function readBody(response) {
         reader.releaseLock();
     }
 }
-function rulesURL(query) {
-    const base = controlBaseURL();
-    const url = new URL(query.model ? `${base}/v1/catalog/models/${encodeURIComponent(query.model)}/pricing-rules`
-        : `${base}/v1/catalog/pricing-rules`);
+function rulesURL(query, account) {
+    // Account prices are served one model at a time.
+    if (account && !query.model)
+        throw new PricingRulesError('account_rules_need_model');
+    const base = account ? account.baseUrl.replace(/\/+$/, '') : controlBaseURL();
+    const url = new URL(account ? `${base}/v1/pricing-rules/${encodeURIComponent(query.model)}`
+        : query.model ? `${base}/v1/catalog/models/${encodeURIComponent(query.model)}/pricing-rules`
+            : `${base}/v1/catalog/pricing-rules`);
     for (const key of ['product_id', 'operation', 'modality', 'lifecycle', 'view']) {
         if (query[key] !== undefined)
             url.searchParams.set(key, query[key]);
     }
     return url;
+}
+/** Public entries are keyed by their URL alone, as before; an account's entries carry the account in front. */
+function cacheKey(url, account) {
+    return account ? `account ${account.identity} ${url.href}` : url.href;
+}
+/**
+ * False for a minute after this gateway answered that it does not serve account prices (an older version, or the
+ * feature switched off), so that is not asked again with every price.
+ */
+export function accountPricesOffered(account) {
+    return (accountPricesNotOffered.get(account.baseUrl) ?? 0) <= Date.now();
 }
 /** The cached answer to this query while it is still within its cache time; nothing is requested. */
 export function cachedPricingRules(input) {
@@ -221,11 +250,17 @@ function matchesModel(rule, model) {
     const name = model.trim().toLowerCase();
     return rule.model_id === name || rule.aliases?.some(alias => alias.toLowerCase() === name) === true;
 }
-/** One model's full rules from the cache: its own entry, else its row in the cached full list. */
-function cachedModel(model, usable) {
-    const own = cache.get(rulesURL(PricingRulesQuery.parse({ model, view: 'full' })).href);
+/**
+ * One model's full rules from the cache: its own entry, else its row in the cached full list. An account's rules only
+ * come from that account's own entry: the full list is public.
+ */
+function cachedModel(model, usable, account) {
+    const query = PricingRulesQuery.parse({ model, view: 'full' });
+    const own = cacheOf(account).get(cacheKey(rulesURL(query, account), account));
     if (own && usable(own))
         return own;
+    if (account)
+        return undefined;
     const list = cache.get(rulesURL(PricingRulesQuery.parse({ view: 'full' })).href);
     const rows = list && usable(list) && 'models' in list.body ? list.body.models : [];
     const exact = rows.find(item => item.model_id === model.toLowerCase());
@@ -239,15 +274,19 @@ export function recentModelRules(model, maxAgeMs) {
     return cachedModel(model, entry => Date.now() - entry.fetchedAt <= maxAgeMs);
 }
 /** The cached answer to a query that `usable` accepts: a model's full rules may come from its row in the cached full list. */
-function reusable(query, usable) {
+function reusable(query, usable, account) {
     if (query.model && query.view === 'full' && !query.product_id && !query.operation && !query.modality && !query.lifecycle)
-        return cachedModel(query.model, usable);
-    const old = cache.get(rulesURL(query).href);
+        return cachedModel(query.model, usable, account);
+    const old = cacheOf(account).get(cacheKey(rulesURL(query, account), account));
     return old && usable(old) ? old : undefined;
 }
-/** Whether getPricingRules(input, { reuseUntilFresh: true }) would answer from the cache now, without reading the platform. */
-export function reusablePricingRules(input) {
-    return reusable(PricingRulesQuery.parse(input), stillFresh) !== undefined;
+/**
+ * Whether a price for this query would be answered from the cache now, without reading the platform: from the
+ * account's own entry with `account`, or from the public rules when the gateway does not serve account prices.
+ */
+export function reusablePricingRules(input, account) {
+    const query = PricingRulesQuery.parse(input);
+    return reusable(query, stillFresh, account && accountPricesOffered(account) ? account : undefined) !== undefined;
 }
 /**
  * `reuseUntilFresh` serves a model's full rules from the cache (its own entry or the full list) until the rules' own
@@ -255,18 +294,26 @@ export function reusablePricingRules(input) {
  * reads `fresh` rules and asks for a new approval when the price moved. `maxAgeMs` lets a fresh read take rules read
  * that recently, still within their fresh_until, so a batch of generations reads them once. Concurrent reads of one
  * query always share a single request.
+ *
+ * `account` asks the gateway for one model at the prices this caller is billed instead of the public default prices
+ * (see AccountRulesAccess). The answer must say price_scope "account", and a public read "public_default"
+ * (validatePricingRules).
  */
 export async function getPricingRules(input, options = {}) {
-    const query = PricingRulesQuery.parse(input), url = rulesURL(query);
-    const key = url.href, old = cache.get(key);
+    const query = PricingRulesQuery.parse(input), account = options.account, url = rulesURL(query, account);
+    const store = cacheOf(account), key = cacheKey(url, account), old = store.get(key);
+    const scope = account ? 'account' : 'public_default';
+    // Not served by this gateway a moment ago: nothing cached is used either, so switching the feature off takes effect at once.
+    if (account && !accountPricesOffered(account))
+        throw new PricingRulesError('account_prices_not_offered', 404);
     if (options.reuseUntilFresh) {
-        const cached = reusable(query, stillFresh);
+        const cached = reusable(query, stillFresh, account);
         if (cached)
             return { body: cached.body, source: 'cache' };
     }
     if (options.maxAgeMs !== undefined) {
         const maxAgeMs = options.maxAgeMs;
-        const recent = reusable(query, entry => stillFresh(entry) && Date.now() - entry.fetchedAt <= maxAgeMs);
+        const recent = reusable(query, entry => stillFresh(entry) && Date.now() - entry.fetchedAt <= maxAgeMs, account);
         if (recent)
             return { body: recent.body, source: 'recent' };
     }
@@ -278,9 +325,10 @@ export async function getPricingRules(input, options = {}) {
     const task = (async () => {
         let conditional = Boolean(old?.etag);
         for (let attempt = 0; attempt < 2; attempt++) {
-            const response = await fetchWithTimeout(key, { method: 'GET', redirect: 'error',
+            // redirect: 'error' also keeps an account read's credential from following a redirect to another host.
+            const response = await fetchWithTimeout(url.href, { method: 'GET', redirect: 'error',
                 headers: { Accept: 'application/json', 'Cache-Control': 'no-cache', ...evoHeaders('get_pricing_rules'),
-                    ...(conditional ? { 'If-None-Match': old.etag } : {}) },
+                    ...(account?.headers ?? {}), ...(conditional ? { 'If-None-Match': old.etag } : {}) },
             }, timeoutFromEnv('EVOLINK_MCP_READ_TIMEOUT_MS', DEFAULT_READ_TIMEOUT_MS));
             if (response.status === 304) {
                 if (!conditional || !old)
@@ -295,11 +343,17 @@ export async function getPricingRules(input, options = {}) {
             }
             if (!response.ok) {
                 const status = response.status;
+                // A model without rules answers 404 not_found. Any other 404 to an account read is a gateway that does not
+                // serve account prices: an older version (no such route) or the feature switched off.
+                if (account && status === 404 && await errorCodeOf(response) !== 'not_found') {
+                    accountPricesNotOffered.set(account.baseUrl, Date.now() + ACCOUNT_PRICES_RECHECK_MS);
+                    throw new PricingRulesError('account_prices_not_offered', 404);
+                }
                 await response.body?.cancel();
                 throw new PricingRulesError(status === 404 ? 'not_found' : status === 429 ? 'rate_limit_exceeded'
                     : status === 503 ? 'pricing_rules_unavailable' : 'pricing_rules_http_error', status, status === 429 ? retryAfterSeconds(response.headers.get('Retry-After')) : undefined);
             }
-            let body = validatePricingRules(await readBody(response), Boolean(query.model));
+            let body = validatePricingRules(await readBody(response), Boolean(query.model), scope);
             const models = 'model' in body ? [body.model] : body.models;
             if (models.some(model => (query.model && !matchesModel(model, query.model))
                 || (query.product_id && model.product_id !== query.product_id) || (query.operation && model.operation !== query.operation)
@@ -308,9 +362,9 @@ export async function getPricingRules(input, options = {}) {
             }
             if (query.view === 'full')
                 body = completeRules(body);
-            if (cache.size >= MAX_CACHE_ENTRIES)
-                cache.delete(cache.keys().next().value);
-            cache.set(key, { body, etag: response.headers.get('ETag') ?? undefined,
+            if (store.size >= (account ? MAX_ACCOUNT_CACHE_ENTRIES : MAX_CACHE_ENTRIES))
+                store.delete(store.keys().next().value);
+            store.set(key, { body, etag: response.headers.get('ETag') ?? undefined,
                 expires: Math.min(Date.now() + CACHE_TTL_MS, Date.parse(body.meta.fresh_until)), fetchedAt: Date.now() });
             return { body, source: 'live' };
         }
@@ -319,7 +373,19 @@ export async function getPricingRules(input, options = {}) {
     pending.set(key, task);
     return task;
 }
-export function resetPricingRulesCacheForTests() { cache.clear(); pending.clear(); }
+export function resetPricingRulesCacheForTests() { cache.clear(); accountCache.clear(); accountPricesNotOffered.clear(); pending.clear(); }
+/** The error code of a refused request, when its body is the gateway's JSON error envelope. */
+async function errorCodeOf(response) {
+    try {
+        const code = (await readBody(response))?.error?.code;
+        return typeof code === 'string' ? code : undefined;
+    }
+    catch (error) {
+        if (error instanceof PricingRulesError && error.code === 'interrupted')
+            throw error;
+        return undefined;
+    }
+}
 function retryAfterSeconds(value) {
     if (!value)
         return undefined;

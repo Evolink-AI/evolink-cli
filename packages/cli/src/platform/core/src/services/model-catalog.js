@@ -9,6 +9,14 @@ import { getPricingRules } from './pricing-rules-client.js';
 function isMediaKind(value) {
     return value === 'image' || value === 'video' || value === 'audio';
 }
+/** A model's unit prices as its rules give them: the catalog's public default ones, or one account's own. */
+export function pricedFromRule(entry, rule) {
+    return { id: entry.id, kind: entry.kind, pricingIncomplete: rule.pricing_status !== 'available',
+        prices: rule.components.map(c => ({ sku_id: c.sku_id, name: c.id,
+            unit: c.unit.includes('token') ? c.unit : c.unit.includes('second') ? 'second' : c.unit.includes('image') ? 'image' : c.unit,
+            min_usd: Number(c.rate.usd), max_usd: Number(c.rate.usd), min_charge_usd: Number(c.minimum_charge.usd),
+            role: c.unit.includes('token') ? 'token' : c.role.includes('output') || c.role === 'request' || c.role === 'output' ? 'output' : 'add_on' })) };
+}
 /** Live available IDs are authoritative; their published aliases join documentation and prices. */
 export async function loadCatalog(config, pricingOptions = {}) {
     const live = await currentModels();
@@ -51,11 +59,7 @@ export async function loadCatalog(config, pricingOptions = {}) {
                     unreadable.push(entry.id);
                 continue;
             }
-            entry.priced = { id: entry.id, kind: entry.kind, pricingIncomplete: rule.pricing_status !== 'available',
-                prices: rule.components.map(c => ({ sku_id: c.sku_id, name: c.id,
-                    unit: c.unit.includes('token') ? c.unit : c.unit.includes('second') ? 'second' : c.unit.includes('image') ? 'image' : c.unit,
-                    min_usd: Number(c.rate.usd), max_usd: Number(c.rate.usd), min_charge_usd: Number(c.minimum_charge.usd),
-                    role: c.unit.includes('token') ? 'token' : c.role.includes('output') || c.role === 'request' || c.role === 'output' ? 'output' : 'add_on' })) };
+            entry.priced = pricedFromRule(entry, rule);
         }
         if (unreadable.length > 0) {
             pricingWarning = `Prices for ${unreadable.length} listed model${unreadable.length === 1 ? ' are' : 's are'} unavailable right now because their published pricing rules could not be read: ${unreadable.slice(0, 10).join(', ')}${unreadable.length > 10 ? `, and ${unreadable.length - 10} more` : ''}. Other prices are unaffected.`;

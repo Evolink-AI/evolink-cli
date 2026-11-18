@@ -7,7 +7,7 @@ import { resolveModel, suggestModels } from '../services/model-catalog.js';
 import { formatIssues, validateInput } from '../services/param-validator.js';
 import { formatEstimateRange } from '../services/pricing-client.js';
 import { ApprovedAccountQuote, QuoteParameters, QuoteError, quoteErrorAt, quoteErrorFields } from '../services/pricing-quote-client.js';
-import { ApprovedRulesEstimate, REFERENCE_BUDGET_FACTOR, amountsForUC, calculateRulesEstimate, createRulesEstimate, checkRulesApproval, readPricingRulesFor, referenceAllowance, referenceBudgetExceeded, rulesBudgetExceeded } from '../services/pricing-rules-estimate.js';
+import { ApprovedRulesEstimate, REFERENCE_BUDGET_FACTOR, accountPricingStatus, accountRulesAccess, amountsForUC, calculateRulesEstimate, createRulesEstimate, checkRulesApproval, readPricingRulesFor, referenceAllowance, referenceBudgetExceeded, rulesBudgetExceeded } from '../services/pricing-rules-estimate.js';
 import { PricingRulesError } from '../services/pricing-rules-client.js';
 import { isOmniTokenModel } from '../services/omni-tokens.js';
 import { isQwenTTSModel, qwenTTSInput } from '../services/qwen-tts-tokens.js';
@@ -66,7 +66,7 @@ function inputSchema(kind) {
             .describe(`Compatibility option for a budget explicitly specified by the user. Compare the submission estimate against that budget; never derive this value from the estimate. This does not limit the final charge. Refuses when the estimate is incomplete or exceeds the budget; a token-billed reference price must fit ${REFERENCE_BUDGET_FACTOR} times over. With inputs it applies to the batch total.`),
         account_quote: ApprovedAccountQuote.optional().describe('Legacy approval. Refresh with estimate_cost and obtain user approval before using the new pricing rules.'),
         pricing_quote: ApprovedRulesEstimate.optional().describe('Client approval record from estimate_cost, for exactly this input (or these inputs), valid until its expires_at (24 hours from the estimate). Rechecked against fresh pricing rules before submission: refused if the input changed, the price rose or it expired; an unchanged or lower price submits. Does not bind final settlement.'),
-        pricing_parameters: QuoteParameters.optional().describe('The same explicit billing usage passed to estimate_cost.'),
+        pricing_parameters: QuoteParameters.optional().describe('The billing usage you gave estimate_cost, if any. The pricing_parameters an estimate shows are what it priced; they need not be passed back.'),
         media_seconds: z.number().positive().max(MEDIA_SECONDS_MAX).optional().describe(MEDIA_SECONDS_DESCRIPTION),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional()
             .describe(`Seconds to wait for the result after submitting, 0–${MAX_WAIT_SECONDS} (default ${WAIT_MS[kind] / 1000}; with inputs only 0). 0 returns the task_id right after submission: use it when submitting several tasks, then collect them with list_tasks.`),
@@ -244,9 +244,11 @@ function registerGenerate(server, config, kind) {
                 throw new QuoteError('quote_refresh_required', 'Refresh the legacy account estimate with estimate_cost and obtain user approval.');
             let rulesEstimate;
             let skipped;
+            // The price is checked against what this account is billed, read again right before submitting.
+            const account = accountRulesAccess(config);
             try {
                 rulesEstimate = await createRulesEstimate(entry, effectiveInput, { mediaSeconds: args.media_seconds, pricingParameters: args.pricing_parameters,
-                    purpose: 'generation', signal: extra.signal });
+                    purpose: 'generation', signal: extra.signal, account });
             }
             catch (error) {
                 // The user asked to generate without an estimate: a price that cannot be computed no longer stops it.
@@ -391,7 +393,8 @@ function registerGenerate(server, config, kind) {
                 submitted: { model: entry.id, input: effectiveInput },
                 ...(prepared.applies ? { effective_input: effectiveInput, defaults_applied: prepared.defaults,
                     usage_assumptions: (estimate?.notes ?? []).filter(note => note.startsWith('Web search is enabled.')) } : {}),
-                pricing_scope: 'public_default',
+                pricing_scope: rulesEstimate?.approval.price_scope ?? 'public_default',
+                ...(rulesEstimate ? accountPricingStatus(account, rulesEstimate.approval.price_scope, rulesEstimate.account_fallback) : {}),
                 pricing_source: 'pricing_rules',
                 ...(rulesEstimate && estimate?.status !== 'needs_input' ? { amounts: rulesEstimate.amounts } : {}),
                 final_budget_enforced: false,
@@ -512,8 +515,13 @@ async function generateBatch(config, kind, args, extra, startedMono) {
         let batchSkipped;
         const itemSkipped = inputs.map(() => undefined);
         let rules;
+        let rulesFallback;
+        // The prices are checked against what this account is billed, read again right before submitting.
+        const account = accountRulesAccess(config);
         try {
-            rules = (await readPricingRulesFor(entry, { purpose: 'generation', signal: extra.signal })).body;
+            const read = await readPricingRulesFor(entry, { purpose: 'generation', signal: extra.signal, account });
+            rules = read.body;
+            rulesFallback = read.accountFallback;
         }
         catch (error) {
             batchSkipped = skipEstimate && !extra.signal.aborted ? unpriced(error) : undefined;
@@ -535,7 +543,7 @@ async function generateBatch(config, kind, args, extra, startedMono) {
         const total = estimates ? batchTotal(entry.id, estimates) : undefined;
         if (args.pricing_quote && total) {
             try {
-                checkBatchApproval(args.pricing_quote, total.approval);
+                checkBatchApproval(args.pricing_quote, total.approval, total.requestHashes);
             }
             catch (error) {
                 if (!skipEstimate || !(error instanceof QuoteError))
@@ -674,7 +682,8 @@ async function generateBatch(config, kind, args, extra, startedMono) {
             batch: { client_request_id: batchId, ...counts },
             items: reports.map(report => report.structured),
             task_ids: taskIds,
-            pricing_scope: 'public_default',
+            pricing_scope: rules?.meta.price_scope ?? 'public_default',
+            ...(rules ? accountPricingStatus(account, rules.meta.price_scope, rulesFallback) : {}),
             pricing_source: 'pricing_rules',
             ...(total && total.status !== 'needs_input' ? { amounts: total.amounts } : {}),
             final_budget_enforced: false,

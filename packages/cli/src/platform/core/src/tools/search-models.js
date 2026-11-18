@@ -47,7 +47,7 @@ export function registerSearchModels(server, config) {
         title: 'Search models',
         description: [
             'Find EvoLink image, video and audio models by type and keywords. Free.',
-            'Returns model IDs with a starting price; call get_model for a model\'s parameters and full pricing before generating.',
+            'Returns model IDs with a starting price at public default rates; call get_model for a model\'s parameters and full pricing (at your account\'s rates when the platform offers them) before generating.',
             'Prices are in USD (68 credits ≈ $1).',
             MODEL_SELECTION_GUIDANCE,
         ].join(' '),
@@ -100,7 +100,7 @@ export function registerSearchModels(server, config) {
             if (matches.length === 0)
                 lines.push('No model matched. Try fewer or broader keywords, or type "all".');
             else
-                lines.push('', 'Next: compare suitable models with get_model. Keyword relevance comes first; platform preferences break ties after price availability. Search order is not a quality or popularity ranking, and a unit starting price is not the task total.');
+                lines.push('', 'Next: compare suitable models with get_model. Keyword relevance comes first; platform preferences break ties after price availability. Search order is not a quality or popularity ranking, and a unit starting price is not the task total. Starting prices are public default rates; get_model and estimate_cost use your account\'s rates when the platform offers them.');
             if (catalog.pricingWarning)
                 lines.push(`Note: ${catalog.pricingWarning}`);
             return ok(lines.join('\n'), {
@@ -108,6 +108,7 @@ export function registerSearchModels(server, config) {
                 total_matches: matches.length,
                 page, page_size: limit, next_page: page * limit < matches.length ? page + 1 : null,
                 availability_source: 'live_catalog_and_health', ordering: 'keyword_relevance_then_price_availability_then_platform_preference_then_id',
+                starting_price_scope: 'public_default',
                 ...(catalog.pricingWarning ? { pricing_warning: catalog.pricingWarning } : {}),
             });
         }

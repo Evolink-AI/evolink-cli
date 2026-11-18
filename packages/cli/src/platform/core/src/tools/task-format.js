@@ -6,11 +6,13 @@ import { publicIdentifier } from '../services/public-error.js';
 import { publicTaskError } from '../services/error-handler.js';
 import { taskBilling } from './task-billing.js';
 import { DASHBOARD_CHECK_GUIDANCE, dashboardCheck, money, sleep, usdOf } from './shared.js';
-/** Result links from the gateway stay downloadable for this long. */
-export const RESULT_LINK_HOURS = 24;
+/** Result links from the gateway stay downloadable for this long (results and uploads are kept 7 days). */
+export const RESULT_LINK_DAYS = 7;
+/** The same in hours, for the structured links_expire_after_hours field. */
+export const RESULT_LINK_HOURS = RESULT_LINK_DAYS * 24;
 /** Generation permission does not also authorize the assistant to alter the output. */
 export const RESULT_DELIVERY_INSTRUCTIONS = [
-    'Deliver the original EvoLink result links immediately on completion, with clear view/download labels and the 24-hour expiry notice. Use delivery_markdown as the primary reply when supplied.',
+    'Deliver the original EvoLink result links immediately on completion, with clear view/download labels and the 7-day expiry notice. Use delivery_markdown as the primary reply when supplied.',
     'Do not delay delivery for inspection or post-processing. A generation request alone does not authorize local editing, compositing, repair or re-encoding; do that only when the user explicitly requests or authorizes post-processing.',
     'Report quality issues and offer options. Keep the original links and label any authorized edited version separately.',
     'Default to ordinary Markdown links for all media, including images; do not automatically add inline remote images or thumbnail placeholders. Only add an image preview when the user requests it and a supported working client preview route is available; otherwise keep the links.',
@@ -19,7 +21,7 @@ export const RESULT_DELIVERY_INSTRUCTIONS = [
     'When a requested local download uses Python urllib, explicitly set a truthful product User-Agent (for example EvoLinkClient/1.0) with urllib.request.Request instead of its default Python UA. Do not forward API keys or Authorization headers to media URLs. If 403/1010 persists, report it rather than regenerating or retrying blindly; client-controlled previews may need a separate fix. Downloading is optional and must not delay original-link delivery.',
 ].join(' ');
 /** Compact tool description; the full contract is sent in server instructions and completed results. */
-export const RESULT_DELIVERY_GUIDANCE = 'On completion, promptly deliver original links with the 24-hour expiry and delivery_markdown. Edit only when the user explicitly requests or authorizes post-processing. Keep original links alongside optional embedded MCP thumbnails; do not add remote-image Markdown or use image syntax for video/audio.';
+export const RESULT_DELIVERY_GUIDANCE = 'On completion, promptly deliver original links with the 7-day expiry and delivery_markdown. Edit only when the user explicitly requests or authorizes post-processing. Keep original links alongside optional embedded MCP thumbnails; do not add remote-image Markdown or use image syntax for video/audio.';
 export const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 /** The gateway charges nothing for a failed task and releases its reservation (refund, or expiry as a backstop). */
 export const FAILED_TASK_BILLING = 'The task failed, so it is not charged. The credits reserved at submission are returned automatically.';
@@ -122,7 +124,7 @@ export function resultResources(taskId, links) {
             type: 'resource_link',
             uri: link.url,
             name: `View/download original ${link.kind} ${index + 1} (${taskId})`,
-            description: `Original EvoLink generated ${link.kind}. View or download; result links expire after ${RESULT_LINK_HOURS} hours. Inline preview depends on the client.`,
+            description: `Original EvoLink generated ${link.kind}. View or download; result links expire after ${RESULT_LINK_DAYS} days. Inline preview depends on the client.`,
             ...(media ? { mimeType: media.mimeType } : {}),
         };
     });
@@ -138,7 +140,7 @@ export function resultDeliveryMarkdown(taskId, links) {
             const destination = link.url.replace(/[\u0000-\u0020<>\\]/g, char => encodeURIComponent(char));
             return `[View/download original ${link.kind} ${index + 1}](<${destination}>)`;
         }),
-        `Result links expire after ${RESULT_LINK_HOURS} hours; save them promptly.`,
+        `Result links expire after ${RESULT_LINK_DAYS} days; save them promptly.`,
     ].join('\n\n');
 }
 /** One task as text lines and the same facts as structured content. */
@@ -179,7 +181,7 @@ export function describeTask(task, statusCheck = 'verified') {
         lines.push(`Public output metadata: ${JSON.stringify(outputs)}`);
     }
     if (links.length > 0) {
-        lines.push(`Results (download links expire after ${RESULT_LINK_HOURS} hours; save them now):`);
+        lines.push(`Results (download links expire after ${RESULT_LINK_DAYS} days; save them now):`);
         for (const link of links)
             lines.push(`- ${link.kind}: ${link.url}`);
         structured.results = links;

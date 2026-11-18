@@ -8,7 +8,7 @@ import { formatIssues, validateInput } from '../services/param-validator.js';
 import { formatEstimateRange } from '../services/pricing-client.js';
 import { PricingRulesError, reusablePricingRules } from '../services/pricing-rules-client.js';
 import { QuoteError, QuoteParameters, quoteErrorAt, quoteErrorFields } from '../services/pricing-quote-client.js';
-import { calculateRulesEstimate, createRulesEstimate, readPricingRulesFor, recentRulesNote } from '../services/pricing-rules-estimate.js';
+import { accountFallbackNote, accountPricingStatus, accountRulesAccess, calculateRulesEstimate, createRulesEstimate, readPricingRulesFor, recentRulesNote } from '../services/pricing-rules-estimate.js';
 import { qwenTTSInput } from '../services/qwen-tts-tokens.js';
 import { prepareSeedanceInput } from '../services/seedance-input.js';
 import { API_KEYS_URL, MCP_CONSOLE_URL, MCP_KEY_NAME, TOP_UP_URL } from '../services/http-policy.js';
@@ -22,6 +22,7 @@ export function registerEstimateCost(server, config) {
         description: [
             'Check a generation input and estimate what it will cost, without submitting anything. Free.',
             'Returns whether the input is valid, the expected price range in USD and credits, what it is based on, and whether the account balance and any spending limit (the EvoLink MCP limit, or this API key\'s) cover it.',
+            'Prices are the rates of the signed-in or API-key account when the platform offers them (pricing_scope: account); otherwise public default rates, which leave out account discounts (pricing_scope: public_default).',
             'Call it before a paid generate_* call, then use the generation confirmation template in the server instructions.',
             `For several tasks of one model, pass inputs (up to ${MAX_BATCH_ITEMS}): one total and one pricing_quote approve the whole batch.`,
         ].join(' '),
@@ -32,7 +33,7 @@ export function registerEstimateCost(server, config) {
             // The leading max() lets zod stop at an oversized array instead of checking every element.
             inputs: z.array(z.record(z.string(), z.unknown())).max(MAX_BATCH_ITEMS).min(1).optional()
                 .describe(`Several inputs for this model (1–${MAX_BATCH_ITEMS}), each as you will pass it in the generate tool's inputs, in the same order. Returns each input's estimate, the total and one pricing_quote that approves the whole batch. media_seconds and pricing_parameters apply to every input. Pass input or inputs, not both.`),
-            pricing_source: z.enum(['pricing_rules', 'account', 'public_reference']).default('pricing_rules').describe('Use published full pricing rules for public default estimates. The old account/public_reference values are compatibility aliases; neither requests a backend account quote.'),
+            pricing_source: z.enum(['pricing_rules', 'account', 'public_reference']).default('pricing_rules').describe('Estimates always evaluate the published full pricing rules; pricing_scope in the result says whether the rates are the account\'s own or the public default ones. The old account/public_reference values are compatibility aliases and choose nothing; neither requests a backend account quote.'),
             pricing_parameters: QuoteParameters.optional().describe('Measured or explicitly expected usage declared by the pricing policy, such as input_seconds or search_count. Missing enabled-search counts produce a zero-search partial subtotal and per-search rates. GPT Image token models do not use token counts here: their reference price comes from the input. Do not invent counts, include user_group/prices/prompts, or treat expected counts as execution limits.'),
             media_seconds: z.number().positive().max(MEDIA_SECONDS_MAX).optional().describe(MEDIA_SECONDS_DESCRIPTION),
         },
@@ -48,8 +49,10 @@ export function registerEstimateCost(server, config) {
                 const suggestions = suggestModels(catalog, model);
                 return failure(`Unknown model "${model}".${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''} Use search_models to find model IDs.`, { error: { category: 'not_found', param: 'model' }, suggestions });
             }
+            // The account's own prices when this request carries a credential; otherwise the public default ones.
+            const account = accountRulesAccess(config);
             if (inputs !== undefined)
-                return await estimateBatch(config, entry, inputs, { mediaSeconds, pricingParameters, pricingSource });
+                return await estimateBatch(config, entry, inputs, { mediaSeconds, pricingParameters, pricingSource, account });
             const prepared = prepareSeedanceInput(entry, qwenTTSInput(entry.id, input ?? {}));
             const values = prepared.input;
             const validation = entry.spec ? validateInput(entry.spec, values) : undefined;
@@ -57,11 +60,11 @@ export function registerEstimateCost(server, config) {
             validation?.warnings.push(...prepared.warnings);
             if (validation?.errors.length)
                 return failure('The generation input is invalid; no estimate was created.', { input_valid: false, problems: validation.errors, error: { category: 'invalid_request' }, charged: 'no' });
-            const over = estimateLimitReached(config, entry);
+            const over = estimateLimitReached(config, entry, account);
             if (over)
                 return limitFailure(over, pricingSource);
-            const rulesEstimate = await createRulesEstimate(entry, values, { mediaSeconds, pricingParameters, reuseRules: config.reusePricingRules === true });
-            const estimate = rulesEstimate.estimate;
+            const rulesEstimate = await createRulesEstimate(entry, values, { mediaSeconds, pricingParameters, reuseRules: config.reusePricingRules === true, account });
+            const estimate = rulesEstimate.estimate, scope = rulesEstimate.approval.price_scope;
             const lines = [`Estimate for ${entry.id} (${entry.kind}); nothing was submitted or charged.`];
             if (!validation) {
                 lines.push('Input not checked: this model\'s parameters are not documented here.');
@@ -102,13 +105,14 @@ export function registerEstimateCost(server, config) {
             const structured = {
                 model: entry.id,
                 type: entry.kind,
-                pricing_scope: 'public_default',
+                pricing_scope: scope,
+                ...accountPricingStatus(account, scope, rulesEstimate.account_fallback),
                 pricing_source: 'pricing_rules',
                 ...(priced ? { pricing_quote: rulesEstimate.approval, amounts: rulesEstimate.amounts } : { submission_allowed: false }),
                 total_known: estimate.total_known === true,
                 ...(estimate.missing_usage ? { missing_usage: estimate.missing_usage } : {}),
                 components: rulesEstimate.components,
-                pricing_parameters: rulesEstimate.parameters,
+                pricing_parameters: rulesEstimate.shownParameters,
                 policy_version: rulesEstimate.rule.policy_version,
                 policy_checksum: rulesEstimate.rule.policy_checksum,
                 settlement_basis: rulesEstimate.rule.settlement_basis,
@@ -126,9 +130,7 @@ export function registerEstimateCost(server, config) {
             };
             await addBalance(config, estimate, lines, structured);
             if (priced)
-                lines.push(`Estimate valid until ${rulesEstimate.approval.expires_at}.`, estimate.status === 'token_billed'
-                    ? 'Public default reference price; account discounts are not included. Confirm it before generation. The final charge follows actual token usage.'
-                    : 'Public default estimate; account discounts are not included. Confirm this estimated cost before generation. Final charges depend on actual usage.');
+                lines.push(`Estimate valid until ${rulesEstimate.approval.expires_at}.`, closingLine(scope, estimate.status === 'token_billed', false));
             else
                 lines.push('No total or approval record was issued. Estimate again with the missing usage before asking the user to approve a generation.');
             return ok(lines.join('\n'), structured);
@@ -152,9 +154,17 @@ export function registerEstimateCost(server, config) {
         }
     });
 }
+/** Whose prices the total uses and what the user confirms; the public wording is the one estimates have always ended with. */
+function closingLine(scope, reference, batch) {
+    const whole = batch ? ' for the whole batch' : '';
+    if (reference) {
+        return `${scope === 'account' ? 'Reference price at your account\'s rates.' : 'Public default reference price; account discounts are not included.'} Confirm it${whole} before generation. The final charge follows actual token usage.`;
+    }
+    return `${scope === 'account' ? 'Estimate at your account\'s rates.' : 'Public default estimate; account discounts are not included.'} Confirm this estimated cost${whole} before generation. Final charges depend on actual usage.`;
+}
 /** Only an estimate that reads the platform's rules counts; one answered from rules read moments ago does not. */
-function estimateLimitReached(config, entry) {
-    const reused = config.reusePricingRules === true && reusablePricingRules({ model: entry.id.toLowerCase(), view: 'full' });
+function estimateLimitReached(config, entry, account) {
+    const reused = config.reusePricingRules === true && reusablePricingRules({ model: entry.id.toLowerCase(), view: 'full' }, account);
     const over = reused ? undefined : pricingCallLimitReached('estimate_cost');
     return over;
 }
@@ -244,11 +254,11 @@ async function estimateBatch(config, entry, inputs, options) {
         return failure(['Some inputs are invalid; no estimate was created:', ...formatIssues(problems)].join('\n'), {
             input_valid: false, problems, error: { category: 'invalid_request' }, charged: 'no', batch
         });
-    const over = estimateLimitReached(config, entry);
+    const over = estimateLimitReached(config, entry, options.account);
     if (over)
         return limitFailure(over, options.pricingSource);
     const reuse = config.reusePricingRules === true;
-    const { body, readAt } = await readPricingRulesFor(entry, { reuseRules: reuse });
+    const { body, readAt, accountFallback: fallback } = await readPricingRulesFor(entry, { reuseRules: reuse, account: options.account });
     const results = prepared.map((item, index) => {
         try {
             return calculateRulesEstimate(body, entry, item.input, { mediaSeconds: options.mediaSeconds, pricingParameters: options.pricingParameters });
@@ -258,6 +268,9 @@ async function estimateBatch(config, entry, inputs, options) {
         }
     });
     const total = batchTotal(entry.id, results), combined = total.estimate, status = total.status;
+    const scope = total.approval.price_scope, fallbackNote = accountFallbackNote(fallback);
+    if (fallbackNote)
+        combined.notes.push(fallbackNote);
     if (readAt)
         combined.notes.push(recentRulesNote(readAt));
     const count = inputs.length;
@@ -297,7 +310,8 @@ async function estimateBatch(config, entry, inputs, options) {
         model: entry.id,
         type: entry.kind,
         batch,
-        pricing_scope: 'public_default',
+        pricing_scope: scope,
+        ...accountPricingStatus(options.account, scope, fallback),
         pricing_source: 'pricing_rules',
         ...(quoted ? { pricing_quote: total.approval, amounts: total.amounts } : { submission_allowed: false }),
         total_known: status === 'estimated',
@@ -320,9 +334,7 @@ async function estimateBatch(config, entry, inputs, options) {
     };
     await addBalance(config, combined, lines, structured);
     if (quoted)
-        lines.push(`Estimate valid until ${total.approval.expires_at}.`, status === 'token_billed'
-            ? `Public default reference price; account discounts are not included. Confirm it for the whole batch before generation. The final charge follows actual token usage.`
-            : `Public default estimate; account discounts are not included. Confirm this estimated cost for the whole batch before generation. Final charges depend on actual usage.`, `One approval covers all ${count} input${count === 1 ? '' : 's'}: pass this pricing_quote with the same inputs, in the same order, to generate_${entry.kind}.`);
+        lines.push(`Estimate valid until ${total.approval.expires_at}.`, closingLine(scope, status === 'token_billed', true), `One approval covers all ${count} input${count === 1 ? '' : 's'}: pass this pricing_quote with the same inputs, in the same order, to generate_${entry.kind}.`);
     else
         lines.push('No total or approval record was issued. Estimate again with the missing usage before asking the user to approve a generation.');
     return ok(lines.join('\n'), structured);

@@ -108,8 +108,9 @@ For `task_response_invalid`, `task_identity_mismatch`, `task_status_unknown`, `t
 For setup problems, run `evolink doctor --agent NAME --json` if the installed version supports the agent option; otherwise use `doctor --json`. Read every failed or skipped check and every `guidance` entry; without `--agent`, outdated or modified skill copies appear in `guidance` and `skills` without failing the check. On Linux, login and later commands need the same unlocked Secret Service/D-Bus session. On SSH hosts, opening the link on another computer requires forwarding the loopback callback port; `--no-browser` does not solve callback routing. Report connection, model discovery and assistant skill discovery separately.
 
 
-Estimates use published full pricing rules and show public default prices, excluding
-personal discounts. Local approvals are current for up to 24 hours from the estimate; submission verifies fresh rules: the same input at the approved price or lower submits, while a higher price, a changed input or an expired approval needs a new estimate and approval.
+Estimates use published full pricing rules at the signed-in account's own rates when the
+platform offers them (`pricing_scope: account`); otherwise they show public default prices,
+excluding personal discounts. Local approvals are current for up to 24 hours from the estimate; submission verifies fresh rules: the same input at the approved price or lower submits, while a higher price, a changed input or an expired approval needs a new estimate and approval.
 Use `evolink estimate --refresh-quote ID` only for an unsubmitted approval; preserve
 the input and explicit user budget and obtain approval again. The refreshed quote
 replaces the old one and keeps its request ID: submit only the newest quote, which

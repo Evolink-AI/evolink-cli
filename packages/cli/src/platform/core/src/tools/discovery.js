@@ -42,7 +42,7 @@ export function registerDiscovery(server, config) {
             return ok([`${models.length} alternatives (${candidates.length} suitable documented models).`,
                 ...models.map(model => `- ${model.model}: ${model.reasons.join('; ')}`), next].join('\n'), {
                 models, total_matches: candidates.length, selection_basis: 'documented_inputs_keyword_match_platform_preference',
-                parameters_source: modelParamsMeta(), unit_prices_are_task_quotes: false, next_step: next,
+                parameters_source: modelParamsMeta(), unit_prices_are_task_quotes: false, starting_price_scope: 'public_default', next_step: next,
                 ...(catalog.pricingWarning ? { pricing_warning: catalog.pricingWarning } : {}),
             });
         }
