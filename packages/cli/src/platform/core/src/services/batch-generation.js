@@ -33,7 +33,8 @@ export function batchTotal(model, items) {
     const status = needsInput.length ? 'needs_input' : partial.length ? 'partial'
         : items.some(item => statusOf(item) === 'token_billed') ? 'token_billed' : 'estimated';
     const amounts = amountsForUC(String(items.reduce((sum, item) => sum + BigInt(item.amounts.uc), 0n)));
-    const approval = { source: 'pricing_rules', price_scope: 'public_default', model_id: model,
+    // Every input of a batch is priced from one read of the rules, so they share one scope.
+    const approval = { source: 'pricing_rules', price_scope: items[0]?.approval.price_scope ?? 'public_default', model_id: model,
         request_hash: quoteRequestHash(model, { batch: items.map(item => item.approval.request_hash) }),
         fingerprint: quoteRequestHash(model, { batch: items.map(item => item.approval.fingerprint) }),
         total_uc: amounts.uc, expires_at: new Date(Date.now() + APPROVAL_TTL_MS).toISOString(), batch_items: items.length };

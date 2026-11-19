@@ -17,7 +17,7 @@ const COMMANDS = {
   balance: ['', 'Read account balance and the shared CLI/MCP OAuth key limits. Free.', {}],
   'models search': ['[options]', 'Search currently available models; search order is not a quality ranking.', { query: string('Search keywords'), type: allMedia, limit: integer(1, 50, 20), page: integer(1, 100000, 1) }],
   'models show': ['MODEL', 'Read documented parameters, example input, reference fields and pricing. Free.', {}],
-  'models pricing': ['[options]', 'Read public default pricing rules without login. Decimal-string rates, minimums, tiers and expressions are configuration references, not account prices, quotes, bills or final spending caps. Coverage follows returned policies and legacy text adapters; empty results do not mean free.', {
+  'models pricing': ['[options]', 'Read pricing rules; no login needed. Signed in, they are at your account\'s own rates when the platform offers them (price_scope: account); otherwise the public default rules. Decimal-string rates, minimums, tiers and expressions are configuration references, not quotes, bills or final spending caps. Coverage follows returned policies and legacy text adapters; empty results do not mean free.', {
     model: string('Model ID or a published alias (case-insensitive); omit for the filtered list'), 'product-id': string('Product ID'), operation: string('Operation, e.g. text_generation'),
     modality: choice(['text', 'image', 'video', 'audio']), lifecycle: choice(['active', 'preview', 'deprecated']), view: { ...choice(['summary', 'full']), default: 'full' },
   }],

@@ -7,12 +7,12 @@ import { referenceInputs } from '../services/model-capabilities.js';
 import { modelPreference } from '../services/model-recommendations.js';
 import { startingPrice } from '../services/pricing-client.js';
 import { trackedLink } from '../services/utm.js';
-import { modelTitle, scoreModel } from './search-models.js';
+import { modelTitle, scoreModel, startingPriceScope, startingPricesNote } from './search-models.js';
 import { READ_ONLY, errorResult, ok } from './shared.js';
 export function registerDiscovery(server, config) {
     server.registerTool('recommend_models', {
         title: 'Compare suitable models',
-        description: 'Find available documented models by output type, optional search keywords and required reference media. Returns alternatives and explicit selection reasons. Platform preferences are editorial, not a quality, popularity or release-date ranking. Starting unit prices are not task totals or budget guarantees. Read get_model and estimate_cost before any paid generation.',
+        description: 'Find available documented models by output type, optional search keywords and required reference media. Returns alternatives and explicit selection reasons. Platform preferences are editorial, not a quality, popularity or release-date ranking. Starting unit prices are at the account\'s own rates when the platform offers them (starting_price_scope), and are not task totals or budget guarantees. Read get_model and estimate_cost before any paid generation.',
         inputSchema: {
             type: z.enum(['image', 'video', 'audio']),
             query: z.string().max(100).optional().describe('Search keywords, not a full generation prompt; every term must match.'),
@@ -40,9 +40,10 @@ export function registerDiscovery(server, config) {
             const next = models.length ? 'Compare parameters with get_model, then estimate_cost using the actual input. Ask for approval before generating.'
                 : 'No documented model met all filters. Try broader keywords with search_models; do not silently drop a required reference kind.';
             return ok([`${models.length} alternatives (${candidates.length} suitable documented models).`,
-                ...models.map(model => `- ${model.model}: ${model.reasons.join('; ')}`), next].join('\n'), {
+                ...models.map(model => `- ${model.model}: ${model.reasons.join('; ')}`), next,
+                ...(models.some(model => model.starting_price) ? [startingPricesNote(catalog)] : [])].join('\n'), {
                 models, total_matches: candidates.length, selection_basis: 'documented_inputs_keyword_match_platform_preference',
-                parameters_source: modelParamsMeta(), unit_prices_are_task_quotes: false, next_step: next,
+                parameters_source: modelParamsMeta(), unit_prices_are_task_quotes: false, ...startingPriceScope(catalog), next_step: next,
                 ...(catalog.pricingWarning ? { pricing_warning: catalog.pricingWarning } : {}),
             });
         }
@@ -61,7 +62,8 @@ export function registerDiscovery(server, config) {
         annotations: { title: 'Search model reference documentation', ...READ_ONLY },
     }, async ({ query, type, limit }) => {
         try {
-            const catalog = await loadCatalog(config);
+            // Documentation only: no prices are read (each account's own list would otherwise be read for nothing).
+            const catalog = await loadCatalog(config, { skipPricing: true });
             const terms = query.toLowerCase().split(/[\s,]+/).filter(Boolean);
             const hits = catalog.entries.filter(entry => entry.spec && (type === 'all' || type === entry.kind))
                 .map(entry => {

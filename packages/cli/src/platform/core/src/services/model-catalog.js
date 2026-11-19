@@ -6,8 +6,17 @@ import { getAvailableModelIds } from './api-client.js';
 import { currentModels } from './catalog-client.js';
 import { closestMatches } from './param-validator.js';
 import { getPricingRules } from './pricing-rules-client.js';
+import { accountPricingStatus, accountRulesAccess, readAccountRulesFirst } from './pricing-rules-estimate.js';
 function isMediaKind(value) {
     return value === 'image' || value === 'video' || value === 'audio';
+}
+/** A model's unit prices as its rules give them: the catalog's public default ones, or one account's own. */
+export function pricedFromRule(entry, rule) {
+    return { id: entry.id, kind: entry.kind, pricingIncomplete: rule.pricing_status !== 'available',
+        prices: rule.components.map(c => ({ sku_id: c.sku_id, name: c.id,
+            unit: c.unit.includes('token') ? c.unit : c.unit.includes('second') ? 'second' : c.unit.includes('image') ? 'image' : c.unit,
+            min_usd: Number(c.rate.usd), max_usd: Number(c.rate.usd), min_charge_usd: Number(c.minimum_charge.usd),
+            role: c.unit.includes('token') ? 'token' : c.role.includes('output') || c.role === 'request' || c.role === 'output' ? 'output' : 'add_on' })) };
 }
 /** Live available IDs are authoritative; their published aliases join documentation and prices. */
 export async function loadCatalog(config, pricingOptions = {}) {
@@ -38,9 +47,15 @@ export async function loadCatalog(config, pricingOptions = {}) {
     if (pricingOptions.skipPricing)
         return { entries: [...entries.values()] };
     let pricingWarning;
+    let priced = {};
     try {
-        const { body } = await getPricingRules({ view: 'full' }, { fresh: pricingOptions.fresh });
+        // Signed in (or with an API key), the list is read at the account's own prices first; when the platform does not
+        // serve them, or they cannot be read just now, the public default list is used and accountPricing says why.
+        const account = accountRulesAccess(config);
+        const { body, accountFallback } = await readAccountRulesFirst(account, from => getPricingRules({ view: 'full' }, { fresh: pricingOptions.fresh, ...(from ? { account: from } : {}) }));
         const rules = 'models' in body ? body.models : [body.model];
+        const { account_pricing: accountPricing } = accountPricingStatus(account, body.meta.price_scope, accountFallback);
+        priced = { pricingScope: body.meta.price_scope, rules, ...(accountPricing ? { accountPricing } : {}) };
         // Rules left out of the list only matter here when they belong to a model this catalog shows.
         const rejected = new Set(('models' in body ? body.rejected_models ?? [] : []).map(id => id.toLowerCase()));
         const unreadable = [];
@@ -51,11 +66,7 @@ export async function loadCatalog(config, pricingOptions = {}) {
                     unreadable.push(entry.id);
                 continue;
             }
-            entry.priced = { id: entry.id, kind: entry.kind, pricingIncomplete: rule.pricing_status !== 'available',
-                prices: rule.components.map(c => ({ sku_id: c.sku_id, name: c.id,
-                    unit: c.unit.includes('token') ? c.unit : c.unit.includes('second') ? 'second' : c.unit.includes('image') ? 'image' : c.unit,
-                    min_usd: Number(c.rate.usd), max_usd: Number(c.rate.usd), min_charge_usd: Number(c.minimum_charge.usd),
-                    role: c.unit.includes('token') ? 'token' : c.role.includes('output') || c.role === 'request' || c.role === 'output' ? 'output' : 'add_on' })) };
+            entry.priced = pricedFromRule(entry, rule);
         }
         if (unreadable.length > 0) {
             pricingWarning = `Prices for ${unreadable.length} listed model${unreadable.length === 1 ? ' are' : 's are'} unavailable right now because their published pricing rules could not be read: ${unreadable.slice(0, 10).join(', ')}${unreadable.length > 10 ? `, and ${unreadable.length - 10} more` : ''}. Other prices are unaffected.`;
@@ -64,7 +75,7 @@ export async function loadCatalog(config, pricingOptions = {}) {
     catch (error) {
         pricingWarning = `Prices are unavailable right now (${error instanceof Error ? error.message : 'unknown error'}).`;
     }
-    return { entries: [...entries.values()], pricingWarning };
+    return { entries: [...entries.values()], pricingWarning, ...priced };
 }
 export function findEntry(catalog, id) {
     const lower = id.trim().toLowerCase();

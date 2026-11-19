@@ -3,17 +3,20 @@
 import { currentRequestCredentials } from '../request-context.js';
 import { RequestTimeoutError } from '../services/http-policy.js';
 import { getPricingRules, PricingRulesError, PricingRulesQuery, reusablePricingRules } from '../services/pricing-rules-client.js';
+import { accountFallbackNote, accountPricingStatus, accountRulesAccess, readAccountRulesFirst } from '../services/pricing-rules-estimate.js';
 import { pricingCallLimitReached } from '../services/pricing-call-limit.js';
 import { failure, ok, READ_ONLY, retryText } from './shared.js';
 export function registerPricingRules(server, config) {
     server.registerTool('get_pricing_rules', {
-        title: 'Read public pricing rules',
-        description: 'Read schema-2 public default pricing rules, decimal-string rates including fractional UC, minimum charges, tiers and optional full expressions. Free and anonymous upstream. Model IDs and published aliases are case-insensitive; results keep the canonical model_id and published aliases. The returned price_selection, when present, identifies route-priority prices or legacy minimum configuration prices. Coverage follows the returned published policies and supported legacy text adapters, including media when available. These are public reference rates, not account prices, live availability, a task quote, a bill or a final spending cap. Do not substitute these rules for media estimate_cost or assume empty media results are free.',
+        title: 'Read pricing rules',
+        description: 'Read schema-2 pricing rules, decimal-string rates including fractional UC, minimum charges, tiers and optional full expressions. Free. A signed-in connection or API key gets the rates of its own account, for one model or a list, when the platform offers them (price_scope: account); otherwise, and without a credential, the public default rates (price_scope: public_default). Model IDs and published aliases are case-insensitive; results keep the canonical model_id and published aliases. The returned price_selection, when present, identifies route-priority prices or legacy minimum configuration prices. Coverage follows the returned published policies and supported legacy text adapters, including media when available. These are reference rates, not live availability, a task quote, a bill or a final spending cap; public default rates are not account prices. Do not substitute these rules for media estimate_cost or assume empty media results are free.',
         inputSchema: PricingRulesQuery.shape,
-        annotations: { title: 'Read public pricing rules', ...READ_ONLY },
+        annotations: { title: 'Read pricing rules', ...READ_ONLY },
     }, async (input) => {
+        // One model or a list is read at the caller's own prices first, falling back to the public default rules.
+        const account = accountRulesAccess(config);
         // Only a lookup that reads the platform's rules counts; one answered from rules read moments ago does not.
-        const over = config.reusePricingRules && reusablePricingRules(input) ? undefined : pricingCallLimitReached('get_pricing_rules');
+        const over = config.reusePricingRules && reusablePricingRules(input, account) ? undefined : pricingCallLimitReached('get_pricing_rules');
         if (over)
             return failure(`This account already made ${over.limit} get_pricing_rules calls that read the pricing rules in the last minute, the most allowed. Wait ${retryText(over.retryAfterSeconds)}, then try again. No quote or spending limit was established.`, {
                 error: { category: 'rate_limited', code: 'pricing_calls_per_minute', retryable: true, retry_after: over.retryAfterSeconds },
@@ -21,22 +24,29 @@ export function registerPricingRules(server, config) {
             });
         try {
             // Hosted: rules stay valid until their own fresh_until, and a burst of lookups must not spend the shared per-IP limit.
-            const { body, source } = await getPricingRules(input, config.reusePricingRules ? { reuseUntilFresh: true } : {});
+            const reuse = config.reusePricingRules ? { reuseUntilFresh: true } : {};
+            const { body, source, accountFallback: fallback } = await readAccountRulesFirst(account, from => getPricingRules(input, { ...reuse, ...(from ? { account: from } : {}) }));
             const models = 'model' in body ? [body.model] : body.models;
             const selection = body.meta.price_selection ?? 'configured_minimum';
+            const ownRates = body.meta.price_scope === 'account';
             const warnings = [
                 selection === 'route_priority'
                     ? 'Public reference rates use enabled routes by priority, with the existing web-price fallback when every route is unavailable. Failover can change the actual routed price.'
                     : 'Legacy public rates use the lowest configured price, which can include an unavailable route and differ from the web-price reference.',
-                'Public default configuration prices may differ from routed settlement, account-group prices, discounts and promotions.',
+                ownRates
+                    ? 'These are the rates of your own account. Routed settlement and promotions can still change what a task is charged.'
+                    : 'Public default configuration prices may differ from routed settlement, discounts and promotions.',
                 'No task quote or final spending cap was established. Do not multiply unit rates into a bill; minimum charges, tiers and rounding apply.',
-                'Coverage follows the models returned for this query. Empty results mean no matching public rules were returned, not zero cost.',
+                `Coverage follows the models returned for this query. Empty results mean no matching ${ownRates ? '' : 'public '}rules were returned, not zero cost.`,
             ];
+            const fallbackNote = accountFallbackNote(fallback);
+            if (fallbackNote)
+                warnings.push(fallbackNote);
             const rejected = 'models' in body ? body.rejected_models ?? [] : [];
             if (rejected.length > 0) {
                 warnings.push(`${rejected.length} model(s) were left out because their published rules could not be read: ${rejected.slice(0, 20).join(', ')}${rejected.length > 20 ? `, and ${rejected.length - 20} more` : ''}. Missing rules do not mean these models are free.`);
             }
-            const lines = [`Public pricing rules (${body.meta.price_scope}; ${selection}; ${source}); ${models.length} model(s).`, ...warnings];
+            const lines = [`${ownRates ? 'Pricing rules at your account\'s rates' : 'Public pricing rules'} (${body.meta.price_scope}; ${selection}; ${source}); ${models.length} model(s).`, ...warnings];
             if (input.model && 'model' in body && input.model !== body.model.model_id) {
                 lines.push(`Requested model ${input.model} resolves to ${body.model.model_id} through a published alias.`);
             }
@@ -46,12 +56,13 @@ export function registerPricingRules(server, config) {
                     lines.push(`- ${component.role}: ${component.rate.usd} USD (${component.rate.credits} credits) per ${component.billing_unit_size} ${component.unit === '1k_tokens' ? 'tokens' : component.unit}; minimum ${component.minimum_charge.usd} USD; ${component.tiers.length} tier(s); ${component.pricing_status}.`);
             }
             return ok(lines.join('\n'), { ...body, ...(input.model ? { requested_model: input.model } : {}), pricing_source: source,
-                pricing_endpoint: '/v1/catalog/pricing-rules', quote_established: false, final_budget_enforced: false,
-                account_price: false, warnings });
+                pricing_endpoint: ownRates ? (input.model ? '/v1/pricing-rules/{model}' : '/v1/pricing-rules') : '/v1/catalog/pricing-rules', quote_established: false, final_budget_enforced: false,
+                account_price: ownRates, ...accountPricingStatus(account, body.meta.price_scope, fallback), warnings });
         }
         catch (error) {
-            // This operation never reads account credentials. A transport failure or
-            // cancellation must not ask the user to sign in or expose exception text.
+            // An account read that fails falls back to the anonymous public read, so a failure here is the
+            // public read's. A transport failure or cancellation must not ask the user to sign in or expose
+            // exception text.
             const safeError = error instanceof PricingRulesError ? error : new PricingRulesError(currentRequestCredentials()?.http?.signal?.aborted ? 'interrupted'
                 : error instanceof RequestTimeoutError ? 'pricing_rules_timeout'
                     : error instanceof TypeError ? 'pricing_rules_network_error' : 'pricing_rules_unavailable');
