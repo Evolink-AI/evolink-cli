@@ -77,7 +77,7 @@ test('seed 20261009: pricing command preserves all filters and rejects unrelated
         return { ok: true };
       } } });
   }
-  for (const options of [{ 'max-cost-usd': '1' }, { confirm: true }, { 'user-group': 'vip' }, { type: 'image' }]) {
+  for (const options of [{ 'max-cost-usd': '1' }, { confirm: true }, { 'user-group': 'x' }, { type: 'image' }]) {
     assert.throws(() => validateCommand(['models', 'pricing'], options));
   }
   const reference = commandHelp(['models', 'pricing']); assert.equal(reference.options.view.default, 'full');

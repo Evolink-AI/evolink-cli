@@ -29,7 +29,7 @@ const schema = {
     model: 'text', object: 'text', type: 'text', created: 'number', progress: 'number', duration: 'number', video_duration: 'number',
     task_info: { can_cancel: 'boolean', estimated_time: 'number', video_duration: 'number' },
     usage: { billing_rule: 'text', credits_reserved: 'number', credits_used: 'number',
-        cost: { credits: 'number', usd: 'number', cny: 'number' }, user_group: 'text' },
+        cost: { credits: 'number', usd: 'number', cny: 'number' } },
     billing: { charge_status: ['unknown', 'reserved', 'charged', 'released'],
         refund_status: ['unknown', 'not_required', 'pending', 'completed', 'failed'],
         refund_scope: ['account_balance'], limit_restoration: ['unknown'], reserved_credits: 'number', charged_credits: 'number',
