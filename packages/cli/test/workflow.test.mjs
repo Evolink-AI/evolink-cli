@@ -130,11 +130,19 @@ test('workflow estimate: the planned output goes to the service; nothing is sent
   assert.deepEqual(calls('get_media_workflow')[1].args, { workflow: 'ad-rebuild', estimate: { output_seconds: 8, keyframes: 4 } });
   assert.equal(short.code, 0);
 
+  // Every resolution the workflow estimate takes, 4k included, goes to the service as given.
+  for (const [index, quality] of ['480p', '1080p', '4k'].entries()) {
+    const each = await cli(['workflow', 'estimate', 'ad-rebuild', '--seconds', '10', '--keyframes', '5', '--quality', quality]);
+    assert.equal(each.code, 0, `${quality}: ${each.stdout}`);
+    assert.deepEqual(calls('get_media_workflow')[2 + index].args, { workflow: 'ad-rebuild', estimate: { output_seconds: 10, keyframes: 5, quality } });
+  }
+
   const before = f.mcpHeaders.length;
   for (const [args, code] of [
     [['--keyframes', '6'], 'missing_option'], [['--seconds', '15'], 'missing_option'],
     [['--seconds', '15.5', '--keyframes', '6'], 'invalid_option'], [['--seconds', '0', '--keyframes', '6'], 'invalid_option'],
-    [['--seconds', '15', '--keyframes', '101'], 'invalid_option'], [['--seconds', '15', '--keyframes', '6', '--quality', '4k'], 'invalid_option'],
+    [['--seconds', '15', '--keyframes', '101'], 'invalid_option'], [['--seconds', '15', '--keyframes', '6', '--quality', '2160p'], 'invalid_option'],
+    [['--seconds', '15', '--keyframes', '6', '--quality', '4K'], 'invalid_option'], [['--seconds', '15', '--keyframes', '6', '--quality', '8k'], 'invalid_option'],
     [['--seconds', '15', '--keyframes', '6', '--aspect-ratio', '2:1'], 'invalid_option'], [['--seconds', '15', '--keyframes', '6', '--creator-images', '-1'], 'invalid_option'],
     [['--seconds', '15', '--keyframes', '6', '--purpose', 'sound'], 'invalid_option'],
   ]) {

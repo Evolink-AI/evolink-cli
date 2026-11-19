@@ -86,7 +86,7 @@ const HELP = `EvoLink CLI ${CLI_VERSION} (Node.js 22+)
   workflow rules NAME [--section ID] [--run RUN_ID]
                                  Step-by-step rules of an EvoLink workflow (free)
   workflow estimate NAME --seconds N --keyframes N [--run RUN_ID]
-           [--quality 480p|720p|1080p] [--aspect-ratio RATIO] [--creator-images N]
+           [--quality 480p|720p|1080p|4k] [--aspect-ratio RATIO] [--creator-images N]
                                  One estimated total for a whole run (free)
   video analyze FILE_URL --run RUN_ID --step STEP --purpose PURPOSE
            [--target-file FILE] [--attempt N]
@@ -363,7 +363,7 @@ export async function dispatch(positionals, options, { state, server, credential
     if (command === 'workflow' && action === 'rules') return workflows.rules(id, { section: options.section, run: options.run });
     if (command === 'workflow' && action === 'estimate') {
       requireThat(options.seconds !== undefined && options.keyframes !== undefined, 'missing_option', 'Pass --seconds and --keyframes: the planned video length and the expected number of keyframe images.');
-      requireThat(options.quality === undefined || ['480p', '720p', '1080p'].includes(options.quality), 'invalid_option', 'quality must be 480p, 720p or 1080p.');
+      requireThat(options.quality === undefined || ['480p', '720p', '1080p', '4k'].includes(options.quality), 'invalid_option', 'quality must be 480p, 720p, 1080p or 4k.');
       requireThat(options['aspect-ratio'] === undefined || ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].includes(options['aspect-ratio']), 'invalid_option', 'aspect-ratio must be 16:9, 9:16, 1:1, 4:3, 3:4 or 21:9.');
       return workflows.estimate(id, { run: options.run, seconds: number(options.seconds, 'seconds', 1, 600, true), keyframes: number(options.keyframes, 'keyframes', 1, 100, true),
         quality: options.quality, aspectRatio: options['aspect-ratio'], creatorImages: number(options['creator-images'], 'creator-images', 0, 10, true) });

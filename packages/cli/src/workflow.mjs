@@ -11,7 +11,7 @@ import { USER_AGENT } from './network.mjs';
 /** How the tool names in workflow rules map to this CLI. Shown with every rules answer. */
 export const WORKFLOW_COMMANDS = Object.freeze({
   get_media_workflow: 'evolink workflow rules NAME [--section ID] [--run RUN_ID] --json',
-  'get_media_workflow with estimate': 'evolink workflow estimate NAME --run RUN_ID --seconds N --keyframes N [--quality 480p|720p|1080p] [--aspect-ratio 9:16] [--creator-images N] --json',
+  'get_media_workflow with estimate': 'evolink workflow estimate NAME --run RUN_ID --seconds N --keyframes N [--quality 480p|720p|1080p|4k] [--aspect-ratio 9:16] [--creator-images N] --json',
   analyze_video: 'evolink video analyze FILE_URL --run RUN_ID --step STEP --purpose PURPOSE [--target-file FILE] [--attempt N] --json',
   get_video_analysis: 'evolink video analysis ANALYSIS_ID --json',
   'upload_file, prepare_upload': 'evolink upload FILE --json',
