@@ -35,7 +35,7 @@ export function registerPricingRules(server, config) {
                     : 'Legacy public rates use the lowest configured price, which can include an unavailable route and differ from the web-price reference.',
                 ownRates
                     ? 'These are the rates of your own account. Routed settlement and promotions can still change what a task is charged.'
-                    : 'Public default configuration prices may differ from routed settlement, account-group prices, discounts and promotions.',
+                    : 'Public default configuration prices may differ from routed settlement, discounts and promotions.',
                 'No task quote or final spending cap was established. Do not multiply unit rates into a bill; minimum charges, tiers and rounding apply.',
                 `Coverage follows the models returned for this query. Empty results mean no matching ${ownRates ? '' : 'public '}rules were returned, not zero cost.`,
             ];
