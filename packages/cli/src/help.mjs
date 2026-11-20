@@ -51,7 +51,7 @@ const COMMANDS = {
     section: string('Section ID from an earlier answer; the overview when omitted'), run: string('run_id returned by the first call of this run'),
   }],
   'workflow estimate': ['NAME --seconds N --keyframes N [options]', 'One estimated total for a whole workflow run, from the published prices of its default models. Show the user this total and what it covers before any paid step. Nothing is charged.', {
-    run: string('run_id of this run'), seconds: integer(1, 600), keyframes: integer(1, 100), quality: choice(['480p', '720p', '1080p']),
+    run: string('run_id of this run'), seconds: integer(1, 600), keyframes: integer(1, 100), quality: choice(['480p', '720p', '1080p', '4k']),
     'aspect-ratio': choice(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']), 'creator-images': integer(0, 10, 0),
   }],
   'video analyze': ['FILE_URL --run RUN_ID --step STEP --purpose PURPOSE [options]', 'Read a video for a workflow step. Paid, by tokens, to the signed-in account, and part of the workflow\'s estimated total: do not run it before the user confirmed that total. FILE_URL is an EvoLink file link (from evolink upload) or an EvoLink result link to an MP4 or MOV. The same command within 24 hours returns the first result without a new charge. A slow read returns an analysis_id for video analysis.', {

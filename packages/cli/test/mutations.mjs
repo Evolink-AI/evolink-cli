@@ -222,6 +222,7 @@ const mutants = [
   ['reference-omni-tiers', 'src/platform/core/src/services/omni-tokens.js', 'return reservation.input_videos?.resolution_assumed ? [...TIERS] : [];', 'return [];'],
 
   // Workflow commands: the one request to the MCP service and what the CLI does with its answer.
+  ['workflow-quality-no-4k', 'src/cli.mjs', "['480p', '720p', '1080p', '4k'].includes(options.quality)", "['480p', '720p', '1080p'].includes(options.quality)"],
   ['workflow-token-header', 'src/workflow.mjs', "headers: { Authorization: `Bearer ${access.access_token}`, 'Content-Type': 'application/json',", "headers: { 'Content-Type': 'application/json',"],
   ['workflow-renew-once', 'src/workflow.mjs', 'if (attempt === 0) continue;', 'if (false) continue;'],
   ['workflow-unknown-tool', 'src/workflow.mjs', "const unknown = /tool \\S+ not found|unknown tool/i.test(said);", 'const unknown = false;'],
