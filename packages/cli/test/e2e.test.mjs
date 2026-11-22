@@ -60,6 +60,24 @@ test('real CLI processes: discovery, quote, approval, generation, result and ori
   const list = await cli(f, home, ['tasks', 'list', '--since', '30m']); assert.equal(list.view.tasks.length, 3);
   assert.equal(f.downloads.length, 3);
   assert.ok(f.downloads.every(h => !h.authorization && !h.cookie && h['user-agent'].startsWith('EvoLinkCLI/')));
+
+  // Ordinary commands carry no call source (only a workflow run's paid steps do): balance, models, estimates, single and
+  // batch generation, task reads.
+  const inputs = path.join(home, 'inputs.json');
+  await fs.writeFile(inputs, JSON.stringify([{ prompt: 'batch one' }, { prompt: 'batch two' }]));
+  for (const kind of ['image', 'video']) {
+    const batch = await cli(f, home, ['generate', kind, '--model', `fixture-${kind}`, '--inputs-file', inputs, '--skip-estimate']);
+    assert.equal(batch.code, 0, JSON.stringify(batch.view));
+  }
+  assert.equal((await cli(f, home, ['tasks', 'get', list.view.tasks[0].task_id])).code, 0);
+  assert.equal((await cli(f, home, ['tasks', 'batch', '--ids', list.view.tasks.map(task => task.task_id).join(',')])).code, 0);
+  const seen = f.restCalls.map(call => `${call.method} ${call.path}`);
+  for (const route of ['GET /v1/credits', 'POST /v1/images/generations', 'POST /v1/videos/generations', 'GET /v1/tasks', 'POST /v1/tasks/batch', `GET /v1/tasks/${list.view.tasks[0].task_id}`]) {
+    assert.ok(seen.includes(route), `${route} was called: ${JSON.stringify([...new Set(seen)])}`);
+  }
+  assert.ok(seen.some(route => route.includes('pricing')), 'the estimates read prices');
+  assert.equal(seen.filter(route => route.endsWith('/generations')).length, 7, 'three quoted and four batched submissions');
+  assert.deepEqual(f.restCalls.filter(call => call.headers['x-evolink-source'] !== undefined).map(call => `${call.method} ${call.path}`), []);
 });
 
 test('lost paid reply: persisted journal and replay recover exactly one task', async t => {
@@ -163,4 +181,57 @@ test('skill installation uses bundled content and protects another skill', async
   await fs.writeFile(installed.path, '---\nname: evolink-cli\n---\n<!-- evolink-media-cli-owned -->\nprevious version');
   await assert.rejects(installSkill({ home: protectedHome }), { code: 'skill_conflict' });
   assert.ok((await fs.readFile(installed.path, 'utf8')).endsWith('previous version'));
+});
+
+test('workflow ownership travels with the quote across CLI processes, refresh, direct submission and replay', async t => {
+  const { f, home } = await context(t);
+  const run = 'wfr-0123456789abcdef0000-aabbccddee';
+  const scope = ['--run', run, '--step', 'final_video'];
+  const input = ['--model', 'fixture-video', '--input', '{"prompt":"one video"}'];
+  const quote = await cli(f, home, ['estimate', ...input, ...scope]);
+  assert.equal(quote.code, 0, JSON.stringify(quote.view));
+  const refreshed = await cli(f, home, ['estimate', '--refresh-quote', quote.view.quote_id]);
+  const id = refreshed.view.quote_id;
+  assert.ok(id, JSON.stringify(refreshed.view));
+  const made = await cli(f, home, ['generate', 'video', '--quote', id, '--confirm']);
+  assert.ok(made.view.task_id, JSON.stringify(made.view));
+  let calls = f.calls.filter(c => c.name === 'generate_video');
+  assert.equal(calls.at(-1).workflowRun, run); assert.equal(calls.at(-1).workflowStep, 'final_video');
+  // A run's paid step says where it comes from; the gateway records it on the task and its logs.
+  assert.equal(calls.at(-1).source, 'mcp_workflow');
+  assert.equal(calls.at(-1).args.input?.workflow, undefined);
+  const recovered = await cli(f, home, ['tasks', 'resume', '--quote', id]);
+  assert.equal(recovered.view.task_id, made.view.task_id);
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').length, calls.length);
+  const ordinary = await cli(f, home, ['generate', 'video', '--skip-estimate', ...input]);
+  assert.ok(ordinary.view.task_id);
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).workflowRun, undefined);
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).source, undefined, 'ordinary generation carries no source');
+  const direct = await cli(f, home, ['generate', 'video', '--skip-estimate', ...input, ...scope]);
+  assert.ok(direct.view.task_id);
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).workflowRun, run);
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).source, 'mcp_workflow');
+  assert.notEqual((await cli(f, home, ['estimate', ...input, '--run', run])).code, 0);
+
+  // The binding is fixed when the quote is made: an approved quote and a refresh take no run or step of their own.
+  const submitted = f.calls.filter(c => c.name === 'generate_video').length;
+  const bound = (await cli(f, home, ['estimate', ...input, ...scope])).view.quote_id;
+  assert.ok(bound);
+  for (const args of [['generate', 'video', '--quote', bound, '--confirm', ...scope], ['generate', 'video', '--quote', bound, '--confirm', '--step', 'keyframe'],
+    ['estimate', '--refresh-quote', bound, ...scope], ['estimate', '--refresh-quote', bound, '--run', run], ['estimate', '--refresh-quote', bound, '--step', 'keyframe']]) {
+    const refused = await cli(f, home, args);
+    assert.deepEqual([refused.code, refused.view.error?.code], [1, 'invalid_option'], args.join(' '));
+  }
+  // A run ID or a step name that cannot be one is refused before anything is priced, saved or submitted.
+  for (const bad of [['--run', 'wfr-123', '--step', 'final_video'], ['--run', run, '--step', 'Final Video'], ['--step', 'final_video'], ['--run', run.toUpperCase(), '--step', 'final_video']]) {
+    for (const command of [['estimate'], ['generate', 'video', '--skip-estimate']]) {
+      const refused = await cli(f, home, [...command, ...input, ...bad]);
+      assert.deepEqual([refused.code, refused.view.error?.code], [1, 'invalid_workflow'], [...command, ...bad].join(' '));
+    }
+  }
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').length, submitted, 'a refused command submits nothing');
+  // The quote made above is still the one that was approved, with its binding.
+  const kept = await cli(f, home, ['generate', 'video', '--quote', bound, '--confirm']);
+  assert.ok(kept.view.task_id, JSON.stringify(kept.view));
+  assert.deepEqual([f.calls.filter(c => c.name === 'generate_video').at(-1).workflowRun, f.calls.filter(c => c.name === 'generate_video').at(-1).workflowStep], [run, 'final_video']);
 });

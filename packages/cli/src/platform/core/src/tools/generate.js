@@ -11,6 +11,7 @@ import { ApprovedRulesEstimate, REFERENCE_BUDGET_FACTOR, accountPricingStatus, a
 import { PricingRulesError } from '../services/pricing-rules-client.js';
 import { isOmniTokenModel } from '../services/omni-tokens.js';
 import { isQwenTTSModel, qwenTTSInput } from '../services/qwen-tts-tokens.js';
+import { isMiniMaxH3ImageModel } from '../services/minimax-h3-image-tokens.js';
 import { CLIENT_REQUEST_ID_PATTERN, monotonicNow, newRunId, remainingMs } from '../services/http-policy.js';
 import { formatUsd } from '../services/error-handler.js';
 import { DASHBOARD_CHECK_GUIDANCE, MEDIA_SECONDS_DESCRIPTION, MEDIA_SECONDS_MAX, PAID, dashboardCheck, errorResult, failure, money, ok, progressReporter, retryText, usdOf } from './shared.js';
@@ -50,9 +51,20 @@ function description(kind) {
 }
 /** Longest prompt accepted through the prompt shortcut. */
 const PROMPT_SHORTCUT_MAX = 20_000;
+const workflowInput = z.object({
+    run_id: z.string().regex(/^wfr-[0-9a-f]{20}-[0-9a-f]{10}$/),
+    step: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/),
+}).strict().describe('Run ID and generation step issued by the current EvoLink workflow.');
+/** `media`: the workflow tool, which takes the kind as an argument. */
 function inputSchema(kind) {
+    const defaultWait = kind === 'media'
+        ? `default ${WAIT_MS.image / 1000} for an image, ${WAIT_MS.video / 1000} for video and audio`
+        : `default ${WAIT_MS[kind] / 1000}`;
     return {
-        model: z.string().min(1).max(128).describe(`${kind[0].toUpperCase()}${kind.slice(1)} model ID from search_models.`),
+        workflow: workflowInput.optional(),
+        model: z.string().min(1).max(128).describe(kind === 'media'
+            ? 'Model ID from search_models; it must be a model of the given kind.'
+            : `${kind[0].toUpperCase()}${kind.slice(1)} model ID from search_models.`),
         // The cap is checked in the handler: a schema limit makes the SDK answer with a bare validation error.
         prompt: z.string().optional().describe(`Shortcut for input.prompt; up to ${PROMPT_SHORTCUT_MAX.toLocaleString('en-US')} characters (get_model lists the model's own limit).`),
         input: z.record(z.string(), z.unknown()).optional()
@@ -69,14 +81,18 @@ function inputSchema(kind) {
         pricing_parameters: QuoteParameters.optional().describe('The billing usage you gave estimate_cost, if any. The pricing_parameters an estimate shows are what it priced; they need not be passed back.'),
         media_seconds: z.number().positive().max(MEDIA_SECONDS_MAX).optional().describe(MEDIA_SECONDS_DESCRIPTION),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional()
-            .describe(`Seconds to wait for the result after submitting, 0–${MAX_WAIT_SECONDS} (default ${WAIT_MS[kind] / 1000}; with inputs only 0). 0 returns the task_id right after submission: use it when submitting several tasks, then collect them with list_tasks.`),
+            .describe(`Seconds to wait for the result after submitting, 0–${MAX_WAIT_SECONDS} (${defaultWait}; with inputs only 0). 0 returns the task_id right after submission: use it when submitting several tasks, then collect them with list_tasks.`),
         skip_estimate: z.boolean().optional().describe('Only when the user has explicitly said not to estimate or not to confirm (for example "generate directly", "no need to estimate", "from now on just generate"); never on your own initiative. Submits without an approved estimate, also when the price cannot be computed or a pricing_quote changed or expired, and says so in the result; the task is charged by actual usage. Invalid input and an explicit max_cost_usd are still checked.'),
     };
 }
 const argsSchema = (kind) => z.object(inputSchema(kind));
-/** What lowers a reference price: GPT Image's output settings, a Gemini Omni video's resolution, length and media, or a Qwen TTS text. */
+/**
+ * What lowers a reference price: GPT Image's output settings, a Gemini Omni video's resolution, length and media, a Qwen
+ * TTS text, or a MiniMax H3 Image's resolution, size, count, prompt enhancement and reference images.
+ */
 const lowerReference = (model) => isOmniTokenModel(model) ? 'quality, duration, images or input videos'
-    : isQwenTTSModel(model) ? 'length of the text' : 'size, quality, count or reference images';
+    : isQwenTTSModel(model) ? 'length of the text' : isMiniMaxH3ImageModel(model) ? 'resolution, size, n, prompt_extend or reference images'
+        : 'size, quality, count or reference images';
 function rangeText(estimate) {
     return formatEstimateRange(estimate) ?? 'unknown';
 }
@@ -155,14 +171,23 @@ function uncheckedCap(estimate, pricingWarning) {
     return [note.replace(/[.\s]+$/, ''), 'Ask the user whether to proceed without a cap.'];
 }
 /** The catalog entry of a generate tool's model, or the refusal to return. */
-async function generationModel(config, kind, model) {
+async function generationModel(config, kind, model, viaWorkflow = false) {
     const { catalog, entry } = await resolveModel(model, config, { fresh: true, allowStale: false, skipPricing: true });
     if (!entry) {
         const suggestions = suggestModels(catalog, model, kind);
         return { refused: failure(`Unknown ${kind} model "${model}".${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''} Use search_models to find model IDs. Nothing was submitted or charged.`, { error: { category: 'not_found', param: 'model' }, suggestions, charged: 'no' }) };
     }
     if (entry.kind !== kind) {
-        return { refused: failure(`${entry.id} is ${entry.kind === 'video' ? 'a' : 'an'} ${entry.kind} model; use generate_${entry.kind}. Nothing was submitted or charged.`, {
+        const article = entry.kind === 'video' ? 'a' : 'an';
+        // The workflow tool stays the tool to use: another tool would submit without the workflow binding.
+        if (viaWorkflow) {
+            return { refused: failure(`${entry.id} is ${article} ${entry.kind} model; set kind to "${entry.kind}" and use a workflow step for ${entry.kind} generation. Nothing was submitted or charged.`, {
+                    error: { category: 'invalid_request', param: 'kind' },
+                    use_kind: entry.kind,
+                    charged: 'no',
+                }) };
+        }
+        return { refused: failure(`${entry.id} is ${article} ${entry.kind} model; use generate_${entry.kind}. Nothing was submitted or charged.`, {
                 error: { category: 'invalid_request', param: 'model' },
                 use_tool: `generate_${entry.kind}`,
                 charged: 'no',
@@ -196,239 +221,261 @@ function registerGenerate(server, config, kind) {
         description: description(kind),
         inputSchema: inputSchema(kind),
         annotations: { title, ...PAID },
+    }, (args, extra) => generateMedia(config, kind, args, extra));
+}
+/** Hosted workflow entry. A missing binding is rejected by the tool schema before paid work. */
+export function registerWorkflowGenerate(server, config, hooks = {}) {
+    server.registerTool('generate_workflow_media', {
+        title: 'Generate media for a workflow (paid)',
+        description: 'Submit one approved workflow generation step. Uses the same pricing, budget and retry rules as generate_image, generate_video and generate_audio.',
+        inputSchema: { ...inputSchema('media'), kind: z.enum(['image', 'video', 'audio']).describe('Media kind of the model: image, video or audio.'), workflow: workflowInput },
+        annotations: { title: 'Generate workflow media', ...PAID },
     }, async (args, extra) => {
         const started = Date.now();
-        const startedMono = monotonicNow();
-        const credentials = currentRequestCredentials();
-        const unavailable = !credentials?.serviceChannel && !credentials?.apiKey ? credentials?.unavailableReason : undefined;
-        if (unavailable)
-            return failure(`${unavailable} Nothing was submitted or charged.`, {
-                error: { category: 'unauthorized' }, charged: 'no',
-            });
-        if (args.inputs !== undefined)
-            return generateBatch(config, kind, args, extra, startedMono);
-        const input = { ...(args.input ?? {}) };
-        if (args.prompt !== undefined) {
-            if (input.prompt !== undefined && input.prompt !== args.prompt) {
-                return failure('prompt was given twice with different values (prompt and input.prompt). Pass it once. Nothing was submitted or charged.', {
-                    error: { category: 'invalid_request', param: 'prompt' },
-                    charged: 'no',
-                });
-            }
-            if (args.prompt.length > PROMPT_SHORTCUT_MAX) {
-                return failure(`The prompt is ${args.prompt.length.toLocaleString('en-US')} characters; the limit is ${PROMPT_SHORTCUT_MAX.toLocaleString('en-US')}. Shorten it and try again. Nothing was submitted or charged.`, {
-                    error: { category: 'invalid_request', param: 'prompt' },
-                    charged: 'no',
-                });
-            }
-            input.prompt = args.prompt;
-        }
-        let clientRequestId;
-        let acceptedTaskId;
+        const refused = await hooks.before?.(args.workflow, args.kind);
+        if (refused)
+            return refused;
+        const result = await generateMedia(config, args.kind, args, extra, true);
         try {
-            const resolved = await generationModel(config, kind, args.model);
-            if ('refused' in resolved)
-                return resolved.refused;
-            const { catalog, entry } = resolved;
-            const { prepared, effectiveInput, errors, warnings } = checkGenerationInput(entry, input);
-            if (errors.length > 0) {
-                return failure([
-                    `The input for ${entry.id} has problems; nothing was submitted or charged:`,
-                    ...formatIssues(errors),
-                    'get_model lists every parameter with its allowed values.',
-                ].join('\n'), { error: { category: 'invalid_request' }, problems: errors, charged: 'no' });
-            }
-            // media_seconds only prices the request; the body below is built from input alone.
-            const skip = args.skip_estimate === true;
-            if (args.account_quote && !skip)
-                throw new QuoteError('quote_refresh_required', 'Refresh the legacy account estimate with estimate_cost and obtain user approval.');
-            let rulesEstimate;
-            let skipped;
-            // The price is checked against what this account is billed, read again right before submitting.
-            const account = accountRulesAccess(config);
-            try {
-                rulesEstimate = await createRulesEstimate(entry, effectiveInput, { mediaSeconds: args.media_seconds, pricingParameters: args.pricing_parameters,
-                    purpose: 'generation', signal: extra.signal, account });
-            }
-            catch (error) {
-                // The user asked to generate without an estimate: a price that cannot be computed no longer stops it.
-                skipped = skip && !extra.signal.aborted ? unpriced(error) : undefined;
-                if (!skipped)
-                    throw error;
-            }
-            if (args.pricing_quote && rulesEstimate) {
-                try {
-                    checkRulesApproval(args.pricing_quote, rulesEstimate);
-                }
-                catch (error) {
-                    if (!skip || !(error instanceof QuoteError))
-                        throw error;
-                    skipped = changedApproval(error, args.pricing_quote, rulesEstimate.estimate.status === 'needs_input' ? undefined : money(Number(rulesEstimate.amounts.credits)));
-                }
-            }
-            const estimate = rulesEstimate?.estimate;
-            // A reference price is settled at actual token usage, so a budget must leave room above it.
-            const reference = estimate?.status === 'token_billed' && estimate.max_usd !== undefined && estimate.uncheckable_reason === undefined;
-            const allowance = reference && rulesEstimate ? referenceAllowance(rulesEstimate.amounts.uc) : undefined;
-            if (args.max_cost_usd !== undefined) {
-                // skip_estimate sets aside the estimate, never the user's own budget.
-                if (!rulesEstimate || !estimate) {
-                    return failure(`max_cost_usd cannot be checked for ${entry.id}: ${skipped?.why ?? 'no price could be computed'}. Nothing was submitted or charged. skip_estimate does not set aside the user's budget: ask the user whether to proceed without the cap.`, {
-                        error: { category: 'invalid_request', param: 'max_cost_usd' },
-                        charged: 'no',
-                    });
-                }
-                if (!reference && (estimate.uncheckable_reason !== undefined || estimate.status !== 'estimated' || estimate.max_usd === undefined)) {
-                    const [reason, next] = uncheckedCap(estimate, catalog.pricingWarning);
-                    return failure(`max_cost_usd cannot be checked for ${entry.id}: ${reason}. Nothing was submitted or charged. ${next}`, {
-                        error: { category: 'invalid_request', param: 'max_cost_usd' },
-                        estimate,
-                        charged: 'no',
-                    });
-                }
-                if (allowance && referenceBudgetExceeded(rulesEstimate.amounts.uc, args.max_cost_usd)) {
-                    return failure(`The reference price ${rangeText(estimate)} is billed by actual token usage, and ${REFERENCE_BUDGET_FACTOR} times it ($${allowance.usd}, ${allowance.credits} credits) is above max_cost_usd $${args.max_cost_usd}. Nothing was submitted or charged. Lower the ${lowerReference(entry.id)}, or ask the user to raise the cap.`, {
-                        error: { category: 'invalid_request', param: 'max_cost_usd' },
-                        estimate, budget_check: { factor: REFERENCE_BUDGET_FACTOR, amounts: allowance },
-                        charged: 'no',
-                    });
-                }
-                if (!allowance && rulesBudgetExceeded(rulesEstimate.amounts.uc, args.max_cost_usd)) {
-                    return failure(`The estimated cost ${rangeText(estimate)} is above max_cost_usd $${formatUsd(args.max_cost_usd)}. Nothing was submitted or charged. Lower the duration, count or quality, or ask the user to raise the cap.`, {
-                        error: { category: 'invalid_request', param: 'max_cost_usd' },
-                        estimate,
-                        charged: 'no',
-                    });
-                }
-            }
-            if (estimate?.status === 'needs_input') {
-                if (!skip) {
-                    return failure([`No total can be estimated for ${entry.id} yet, so nothing was submitted or charged. The total depends on:`,
-                        ...(estimate.usage_help ?? []).map(line => `- ${line}`),
-                        'Estimate again with this usage and get the user\'s approval before generating.'].join('\n'), {
-                        error: { category: 'estimate_unavailable', code: 'quote_usage_required' },
-                        missing_usage: estimate.missing_usage, usage_help: estimate.usage_help, charged: 'no', submission_state: 'not_submitted'
-                    });
-                }
-                skipped ??= { reason: 'needs_input', why: `no total can be estimated before the task runs (it depends on ${estimate.missing_usage?.join(', ') ?? 'usage measured when it runs'})` };
-            }
-            // An approved pricing_quote that still matches means nothing was skipped.
-            const estimateSkipped = skip && !(args.pricing_quote && rulesEstimate && !skipped);
-            clientRequestId = args.client_request_id ?? newRunId();
-            const body = { ...effectiveInput, model: entry.id };
-            const submitted = await submitTask(config, {
-                path: entry.spec?.path ?? PATHS[kind],
-                body,
-                tool: name,
-                idempotencyKey: clientRequestId,
+            hooks.after?.(args.workflow, args.kind, result, Date.now() - started);
+        }
+        catch { /* A record that cannot be written never changes the answer. */ }
+        return result;
+    });
+}
+async function generateMedia(config, kind, args, extra, viaWorkflow = false) {
+    const name = `generate_${kind}`;
+    const started = Date.now();
+    const startedMono = monotonicNow();
+    const credentials = currentRequestCredentials();
+    const unavailable = !credentials?.serviceChannel && !credentials?.apiKey ? credentials?.unavailableReason : undefined;
+    if (unavailable)
+        return failure(`${unavailable} Nothing was submitted or charged.`, {
+            error: { category: 'unauthorized' }, charged: 'no',
+        });
+    if (args.inputs !== undefined)
+        return generateBatch(config, kind, args, extra, startedMono, viaWorkflow);
+    const input = { ...(args.input ?? {}) };
+    if (args.prompt !== undefined) {
+        if (input.prompt !== undefined && input.prompt !== args.prompt) {
+            return failure('prompt was given twice with different values (prompt and input.prompt). Pass it once. Nothing was submitted or charged.', {
+                error: { category: 'invalid_request', param: 'prompt' },
+                charged: 'no',
             });
-            acceptedTaskId = submitted.id;
-            let task = submitted;
-            let statusCheck = 'not_requested';
-            // The post-submit wait has its own deadline; it never bounds or interrupts the paid submission above.
-            const waitMs = args.wait_seconds !== undefined ? args.wait_seconds * 1000 : WAIT_MS[kind];
-            const waitUntil = startedMono + waitMs;
-            if ((!task.status || !TERMINAL_STATUSES.has(task.status)) && waitMs > 0 && remainingMs(waitUntil) > 3_000) {
-                const report = progressReporter(extra, waitMs / 1000);
-                try {
-                    const waited = await waitForTask(config, submitted.id, {
-                        deadline: waitUntil,
-                        tool: name,
-                        signal: extra.signal,
-                        onPoll: current => report((Date.now() - started) / 1000, `${current.status}${current.progress !== undefined ? `, ${current.progress}%` : ''}`),
-                    });
-                    task = waited.task;
-                    statusCheck = waited.statusCheck;
-                }
-                catch {
-                    // The task exists; a failed status read must not turn a successful submit into an error.
-                    task = submitted;
-                    statusCheck = 'unverified';
-                }
-                task.usage = { ...submitted.usage, ...task.usage };
-            }
-            const view = describeTask({ ...task, request_id: task.request_id ?? submitted.request_id }, statusCheck);
-            const header = submitted.idempotency_replayed
-                ? `This client_request_id was used before: returning the original task (no new charge).`
-                : `Submitted ${entry.id}.`;
-            const lines = [header, ...view.lines];
-            const reserved = submitted.usage?.credits_reserved;
-            if (typeof reserved === 'number' && reserved > 0 && !lines.some(line => line.startsWith('Reserved:')) && task.status !== 'completed') {
-                lines.push(`Reserved: ${money(reserved)}`);
-            }
-            if (estimateSkipped) {
-                if (!skipped)
-                    lines.push('Submitted at the user\'s request without an approved estimate (skip_estimate).');
-                else if (QUOTE_REFUSALS.has(skipped.reason))
-                    lines.push(`Submitted at the user's request (skip_estimate) although ${skipped.why}.`);
-                else
-                    lines.push(`Price check skipped at the user's request (skip_estimate): ${skipped.why}. The task is charged by actual usage.`);
-                if (!(typeof reserved === 'number' && reserved > 0) && task.status !== 'completed')
-                    lines.push('get_task shows the charge when the task finishes.');
-            }
-            if (estimate?.status === 'estimated')
-                lines.push(`Estimate before submitting: ${rangeText(estimate)}`);
-            if (reference && estimate)
-                lines.push(`Reference price before submitting: ${rangeText(estimate)}. Billed by actual token usage; the final charge is settled when the task finishes.`);
-            if (allowance && args.max_cost_usd !== undefined)
-                lines.push(`max_cost_usd $${args.max_cost_usd} covers ${REFERENCE_BUDGET_FACTOR} times the reference price ($${allowance.usd}, ${allowance.credits} credits). This was checked before submitting; it does not limit the final charge.`);
-            if (estimate?.search_charges?.length && estimate.status === 'estimated') {
-                for (const note of estimate.notes.filter(note => /^(Web|Image) search is enabled\./.test(note)))
-                    lines.push(`Note: ${note}`);
-            }
-            for (const applied of prepared.defaults)
-                lines.push(`Applied default: ${applied.param}=${applied.value} (${applied.reason}).`);
-            if (estimate?.status === 'partial') {
-                lines.push(`Partial estimate at published rates: ${rangeText(estimate)} (not a total or an upper bound).`);
-                for (const extra of estimate.possible_extras)
-                    lines.push(`May also charge: ${extra}`);
-                for (const note of estimate.notes)
-                    lines.push(`Note: ${note}`);
-            }
-            for (const warning of warnings)
-                lines.push(`Warning: ${warning}`);
-            lines.push(`client_request_id: ${clientRequestId}`);
-            return ok(lines.join('\n'), {
-                ...view.structured,
-                submitted: { model: entry.id, input: effectiveInput },
-                ...(prepared.applies ? { effective_input: effectiveInput, defaults_applied: prepared.defaults,
-                    usage_assumptions: (estimate?.notes ?? []).filter(note => note.startsWith('Web search is enabled.')) } : {}),
-                pricing_scope: rulesEstimate?.approval.price_scope ?? 'public_default',
-                ...(rulesEstimate ? accountPricingStatus(account, rulesEstimate.approval.price_scope, rulesEstimate.account_fallback) : {}),
-                pricing_source: 'pricing_rules',
-                ...(rulesEstimate && estimate?.status !== 'needs_input' ? { amounts: rulesEstimate.amounts } : {}),
-                final_budget_enforced: false,
-                ...(estimate?.search_charges?.length ? { search_charges: estimate.search_charges, estimate,
-                    amount_scope: estimate.status === 'partial' ? 'known_components_subtotal' : 'expected_usage_estimate' } : {}),
-                client_request_id: clientRequestId,
-                submission_state: 'accepted',
-                replayed: submitted.idempotency_replayed === true,
-                ...(estimateSkipped ? { estimate_skipped: true, estimate_skip_reason: skipped?.reason ?? 'none' } : {}),
-                ...(skipped?.approved ? { approved_amounts: amountsForUC(skipped.approved) } : {}),
-                ...(typeof reserved === 'number' ? { reserved_credits: reserved, reserved_usd: usdOf(reserved) } : {}),
-                ...(estimate?.status === 'estimated' && !estimate.search_charges?.length ? { estimate: { min_usd: estimate.min_usd, max_usd: estimate.max_usd } } : {}),
-                ...(estimate?.status === 'partial' ? { estimate } : {}),
-                ...(reference && estimate ? { estimate: { status: estimate.status, min_usd: estimate.min_usd, max_usd: estimate.max_usd, total_known: false,
-                        reference_usage: estimate.reference_usage } } : {}),
-                ...(allowance && args.max_cost_usd !== undefined ? { budget_check: { factor: REFERENCE_BUDGET_FACTOR, amounts: allowance, max_cost_usd: args.max_cost_usd } } : {}),
-                ...(warnings.length ? { warnings } : {}),
-            }, view.resources);
+        }
+        if (args.prompt.length > PROMPT_SHORTCUT_MAX) {
+            return failure(`The prompt is ${args.prompt.length.toLocaleString('en-US')} characters; the limit is ${PROMPT_SHORTCUT_MAX.toLocaleString('en-US')}. Shorten it and try again. Nothing was submitted or charged.`, {
+                error: { category: 'invalid_request', param: 'prompt' },
+                charged: 'no',
+            });
+        }
+        input.prompt = args.prompt;
+    }
+    let clientRequestId;
+    let acceptedTaskId;
+    try {
+        const resolved = await generationModel(config, kind, args.model, viaWorkflow);
+        if ('refused' in resolved)
+            return resolved.refused;
+        const { catalog, entry } = resolved;
+        const { prepared, effectiveInput, errors, warnings } = checkGenerationInput(entry, input);
+        if (errors.length > 0) {
+            return failure([
+                `The input for ${entry.id} has problems; nothing was submitted or charged:`,
+                ...formatIssues(errors),
+                'get_model lists every parameter with its allowed values.',
+            ].join('\n'), { error: { category: 'invalid_request' }, problems: errors, charged: 'no' });
+        }
+        // media_seconds only prices the request; the body below is built from input alone.
+        const skip = args.skip_estimate === true;
+        if (args.account_quote && !skip)
+            throw new QuoteError('quote_refresh_required', 'Refresh the legacy account estimate with estimate_cost and obtain user approval.');
+        let rulesEstimate;
+        let skipped;
+        // The price is checked against what this account is billed, read again right before submitting.
+        const account = accountRulesAccess(config);
+        try {
+            rulesEstimate = await createRulesEstimate(entry, effectiveInput, { mediaSeconds: args.media_seconds, pricingParameters: args.pricing_parameters,
+                purpose: 'generation', signal: extra.signal, account });
         }
         catch (error) {
-            if (error instanceof PricingRulesError)
-                return failure(error.code === 'rate_limit_exceeded'
-                    ? `The platform is limiting pricing requests right now, so the price could not be checked and nothing was submitted or charged. Try again in ${retryText(error.retryAfter)}.`
-                    : 'The pricing rules could not be verified. Nothing was submitted or charged.', {
-                    error: { category: 'estimate_unavailable', code: error.code, ...(error.retryAfter !== undefined ? { retry_after_seconds: error.retryAfter } : {}) },
-                    charged: 'no', submission_state: 'not_submitted'
-                });
-            if (error instanceof QuoteError)
-                return failure(`${error.message} Nothing was submitted or charged.`, { error: { category: 'estimate_unavailable', ...quoteErrorFields(error) }, charged: 'no', submission_state: 'not_submitted' });
-            // clientRequestId is set right before the submit, so it also tells whether a request may have gone out.
-            return errorResult(error, { paid: clientRequestId !== undefined, clientRequestId, taskId: acceptedTaskId,
-                phase: acceptedTaskId ? 'accepted' : clientRequestId ? 'submit_started' : 'before_submit' });
+            // The user asked to generate without an estimate: a price that cannot be computed no longer stops it.
+            skipped = skip && !extra.signal.aborted ? unpriced(error) : undefined;
+            if (!skipped)
+                throw error;
         }
-    });
+        if (args.pricing_quote && rulesEstimate) {
+            try {
+                checkRulesApproval(args.pricing_quote, rulesEstimate);
+            }
+            catch (error) {
+                if (!skip || !(error instanceof QuoteError))
+                    throw error;
+                skipped = changedApproval(error, args.pricing_quote, rulesEstimate.estimate.status === 'needs_input' ? undefined : money(Number(rulesEstimate.amounts.credits)));
+            }
+        }
+        const estimate = rulesEstimate?.estimate;
+        // A reference price is settled at actual token usage, so a budget must leave room above it.
+        const reference = estimate?.status === 'token_billed' && estimate.max_usd !== undefined && estimate.uncheckable_reason === undefined;
+        const allowance = reference && rulesEstimate ? referenceAllowance(rulesEstimate.amounts.uc) : undefined;
+        if (args.max_cost_usd !== undefined) {
+            // skip_estimate sets aside the estimate, never the user's own budget.
+            if (!rulesEstimate || !estimate) {
+                return failure(`max_cost_usd cannot be checked for ${entry.id}: ${skipped?.why ?? 'no price could be computed'}. Nothing was submitted or charged. skip_estimate does not set aside the user's budget: ask the user whether to proceed without the cap.`, {
+                    error: { category: 'invalid_request', param: 'max_cost_usd' },
+                    charged: 'no',
+                });
+            }
+            if (!reference && (estimate.uncheckable_reason !== undefined || estimate.status !== 'estimated' || estimate.max_usd === undefined)) {
+                const [reason, next] = uncheckedCap(estimate, catalog.pricingWarning);
+                return failure(`max_cost_usd cannot be checked for ${entry.id}: ${reason}. Nothing was submitted or charged. ${next}`, {
+                    error: { category: 'invalid_request', param: 'max_cost_usd' },
+                    estimate,
+                    charged: 'no',
+                });
+            }
+            if (allowance && referenceBudgetExceeded(rulesEstimate.amounts.uc, args.max_cost_usd)) {
+                return failure(`The reference price ${rangeText(estimate)} is billed by actual token usage, and ${REFERENCE_BUDGET_FACTOR} times it ($${allowance.usd}, ${allowance.credits} credits) is above max_cost_usd $${args.max_cost_usd}. Nothing was submitted or charged. Lower the ${lowerReference(entry.id)}, or ask the user to raise the cap.`, {
+                    error: { category: 'invalid_request', param: 'max_cost_usd' },
+                    estimate, budget_check: { factor: REFERENCE_BUDGET_FACTOR, amounts: allowance },
+                    charged: 'no',
+                });
+            }
+            if (!allowance && rulesBudgetExceeded(rulesEstimate.amounts.uc, args.max_cost_usd)) {
+                return failure(`The estimated cost ${rangeText(estimate)} is above max_cost_usd $${formatUsd(args.max_cost_usd)}. Nothing was submitted or charged. Lower the duration, count or quality, or ask the user to raise the cap.`, {
+                    error: { category: 'invalid_request', param: 'max_cost_usd' },
+                    estimate,
+                    charged: 'no',
+                });
+            }
+        }
+        if (estimate?.status === 'needs_input') {
+            if (!skip) {
+                return failure([`No total can be estimated for ${entry.id} yet, so nothing was submitted or charged. The total depends on:`,
+                    ...(estimate.usage_help ?? []).map(line => `- ${line}`),
+                    'Estimate again with this usage and get the user\'s approval before generating.'].join('\n'), {
+                    error: { category: 'estimate_unavailable', code: 'quote_usage_required' },
+                    missing_usage: estimate.missing_usage, usage_help: estimate.usage_help, charged: 'no', submission_state: 'not_submitted'
+                });
+            }
+            skipped ??= { reason: 'needs_input', why: `no total can be estimated before the task runs (it depends on ${estimate.missing_usage?.join(', ') ?? 'usage measured when it runs'})` };
+        }
+        // An approved pricing_quote that still matches means nothing was skipped.
+        const estimateSkipped = skip && !(args.pricing_quote && rulesEstimate && !skipped);
+        clientRequestId = args.client_request_id ?? newRunId();
+        const body = { ...effectiveInput, model: entry.id };
+        const submitted = await submitTask(config, {
+            path: entry.spec?.path ?? PATHS[kind],
+            body,
+            tool: name,
+            idempotencyKey: clientRequestId, workflow: args.workflow,
+        });
+        acceptedTaskId = submitted.id;
+        let task = submitted;
+        let statusCheck = 'not_requested';
+        // The post-submit wait has its own deadline; it never bounds or interrupts the paid submission above.
+        const waitMs = args.wait_seconds !== undefined ? args.wait_seconds * 1000 : WAIT_MS[kind];
+        const waitUntil = startedMono + waitMs;
+        if ((!task.status || !TERMINAL_STATUSES.has(task.status)) && waitMs > 0 && remainingMs(waitUntil) > 3_000) {
+            const report = progressReporter(extra, waitMs / 1000);
+            try {
+                const waited = await waitForTask(config, submitted.id, {
+                    deadline: waitUntil,
+                    tool: name,
+                    signal: extra.signal,
+                    onPoll: current => report((Date.now() - started) / 1000, `${current.status}${current.progress !== undefined ? `, ${current.progress}%` : ''}`),
+                });
+                task = waited.task;
+                statusCheck = waited.statusCheck;
+            }
+            catch {
+                // The task exists; a failed status read must not turn a successful submit into an error.
+                task = submitted;
+                statusCheck = 'unverified';
+            }
+            task.usage = { ...submitted.usage, ...task.usage };
+        }
+        const view = describeTask({ ...task, request_id: task.request_id ?? submitted.request_id }, statusCheck);
+        const header = submitted.idempotency_replayed
+            ? `This client_request_id was used before: returning the original task (no new charge).`
+            : `Submitted ${entry.id}.`;
+        const lines = [header, ...view.lines];
+        const reserved = submitted.usage?.credits_reserved;
+        if (typeof reserved === 'number' && reserved > 0 && !lines.some(line => line.startsWith('Reserved:')) && task.status !== 'completed') {
+            lines.push(`Reserved: ${money(reserved)}`);
+        }
+        if (estimateSkipped) {
+            if (!skipped)
+                lines.push('Submitted at the user\'s request without an approved estimate (skip_estimate).');
+            else if (QUOTE_REFUSALS.has(skipped.reason))
+                lines.push(`Submitted at the user's request (skip_estimate) although ${skipped.why}.`);
+            else
+                lines.push(`Price check skipped at the user's request (skip_estimate): ${skipped.why}. The task is charged by actual usage.`);
+            if (!(typeof reserved === 'number' && reserved > 0) && task.status !== 'completed')
+                lines.push('get_task shows the charge when the task finishes.');
+        }
+        if (estimate?.status === 'estimated')
+            lines.push(`Estimate before submitting: ${rangeText(estimate)}`);
+        if (reference && estimate)
+            lines.push(`Reference price before submitting: ${rangeText(estimate)}. Billed by actual token usage; the final charge is settled when the task finishes.`);
+        if (allowance && args.max_cost_usd !== undefined)
+            lines.push(`max_cost_usd $${args.max_cost_usd} covers ${REFERENCE_BUDGET_FACTOR} times the reference price ($${allowance.usd}, ${allowance.credits} credits). This was checked before submitting; it does not limit the final charge.`);
+        if (estimate?.search_charges?.length && estimate.status === 'estimated') {
+            for (const note of estimate.notes.filter(note => /^(Web|Image) search is enabled\./.test(note)))
+                lines.push(`Note: ${note}`);
+        }
+        for (const applied of prepared.defaults)
+            lines.push(`Applied default: ${applied.param}=${applied.value} (${applied.reason}).`);
+        if (estimate?.status === 'partial') {
+            lines.push(`Partial estimate at published rates: ${rangeText(estimate)} (not a total or an upper bound).`);
+            for (const extra of estimate.possible_extras)
+                lines.push(`May also charge: ${extra}`);
+            for (const note of estimate.notes)
+                lines.push(`Note: ${note}`);
+        }
+        for (const warning of warnings)
+            lines.push(`Warning: ${warning}`);
+        lines.push(`client_request_id: ${clientRequestId}`);
+        return ok(lines.join('\n'), {
+            ...view.structured,
+            submitted: { model: entry.id, input: effectiveInput },
+            ...(prepared.applies ? { effective_input: effectiveInput, defaults_applied: prepared.defaults,
+                usage_assumptions: (estimate?.notes ?? []).filter(note => note.startsWith('Web search is enabled.')) } : {}),
+            pricing_scope: rulesEstimate?.approval.price_scope ?? 'public_default',
+            ...(rulesEstimate ? accountPricingStatus(account, rulesEstimate.approval.price_scope, rulesEstimate.account_fallback) : {}),
+            pricing_source: 'pricing_rules',
+            ...(rulesEstimate && estimate?.status !== 'needs_input' ? { amounts: rulesEstimate.amounts } : {}),
+            final_budget_enforced: false,
+            ...(estimate?.search_charges?.length ? { search_charges: estimate.search_charges, estimate,
+                amount_scope: estimate.status === 'partial' ? 'known_components_subtotal' : 'expected_usage_estimate' } : {}),
+            client_request_id: clientRequestId,
+            submission_state: 'accepted',
+            replayed: submitted.idempotency_replayed === true,
+            ...(estimateSkipped ? { estimate_skipped: true, estimate_skip_reason: skipped?.reason ?? 'none' } : {}),
+            ...(skipped?.approved ? { approved_amounts: amountsForUC(skipped.approved) } : {}),
+            ...(typeof reserved === 'number' ? { reserved_credits: reserved, reserved_usd: usdOf(reserved) } : {}),
+            ...(estimate?.status === 'estimated' && !estimate.search_charges?.length ? { estimate: { min_usd: estimate.min_usd, max_usd: estimate.max_usd } } : {}),
+            ...(estimate?.status === 'partial' ? { estimate } : {}),
+            ...(reference && estimate ? { estimate: { status: estimate.status, min_usd: estimate.min_usd, max_usd: estimate.max_usd, total_known: false,
+                    reference_usage: estimate.reference_usage } } : {}),
+            ...(allowance && args.max_cost_usd !== undefined ? { budget_check: { factor: REFERENCE_BUDGET_FACTOR, amounts: allowance, max_cost_usd: args.max_cost_usd } } : {}),
+            ...(warnings.length ? { warnings } : {}),
+        }, view.resources);
+    }
+    catch (error) {
+        if (error instanceof PricingRulesError)
+            return failure(error.code === 'rate_limit_exceeded'
+                ? `The platform is limiting pricing requests right now, so the price could not be checked and nothing was submitted or charged. Try again in ${retryText(error.retryAfter)}.`
+                : 'The pricing rules could not be verified. Nothing was submitted or charged.', {
+                error: { category: 'estimate_unavailable', code: error.code, ...(error.retryAfter !== undefined ? { retry_after_seconds: error.retryAfter } : {}) },
+                charged: 'no', submission_state: 'not_submitted'
+            });
+        if (error instanceof QuoteError)
+            return failure(`${error.message} Nothing was submitted or charged.`, { error: { category: 'estimate_unavailable', ...quoteErrorFields(error) }, charged: 'no', submission_state: 'not_submitted' });
+        // clientRequestId is set right before the submit, so it also tells whether a request may have gone out.
+        return errorResult(error, { paid: clientRequestId !== undefined, clientRequestId, taskId: acceptedTaskId,
+            phase: acceptedTaskId ? 'accepted' : clientRequestId ? 'submit_started' : 'before_submit' });
+    }
 }
 const itemList = (indexes) => indexes.map(index => `inputs[${index}]`).join(', ');
 /**
@@ -483,7 +530,7 @@ function itemReport(submission, cancelled) {
  * Several inputs for one model: every input is checked first, the rules are read once, one batch approval (or
  * skip_estimate) covers them all and max_cost_usd the total; then the items are submitted together (submitBatch).
  */
-async function generateBatch(config, kind, args, extra, startedMono) {
+async function generateBatch(config, kind, args, extra, startedMono, viaWorkflow = false) {
     const name = `generate_${kind}`, inputs = args.inputs, count = inputs.length, batch = { items: count };
     const refuse = (param, text) => failure(`${text} Nothing was submitted or charged.`, { error: { category: 'invalid_request', param }, charged: 'no', batch });
     if (args.input !== undefined)
@@ -497,7 +544,7 @@ async function generateBatch(config, kind, args, extra, startedMono) {
     }
     let batchId;
     try {
-        const resolved = await generationModel(config, kind, args.model);
+        const resolved = await generationModel(config, kind, args.model, viaWorkflow);
         if ('refused' in resolved)
             return resolved.refused;
         const { catalog, entry } = resolved;
@@ -602,7 +649,7 @@ async function generateBatch(config, kind, args, extra, startedMono) {
         batchId = args.client_request_id ?? newRunId();
         const token = extra._meta?.progressToken;
         const submissions = await submitBatch(config, { path: entry.spec?.path ?? PATHS[kind], bodies: checked.map(item => ({ ...item.effectiveInput, model: entry.id })),
-            batchId, tool: name, startedMono, signal: extra.signal,
+            workflow: args.workflow, batchId, tool: name, startedMono, signal: extra.signal,
             onSubmitted: done => {
                 if (token !== undefined)
                     void extra.sendNotification({ method: 'notifications/progress',

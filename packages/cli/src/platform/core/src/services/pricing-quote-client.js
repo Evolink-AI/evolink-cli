@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { requestAccountQuote } from './api-client.js';
 import { getPricingRules, PricingMoney } from './pricing-rules-client.js';
-import { isSeedanceGeneration } from './seedance-input.js';
+import { isSeedanceEdit } from './seedance-input.js';
 import { searchUsage } from './search-usage.js';
 import { effectiveMjV7EditPrompt } from './mj-prompt.js';
 import { CONSERVATIVE_QUOTE_PARAMETERS, derivedQuoteParameter, derivedUsage, isRuleDefaultWord } from './pricing-derived.js';
@@ -126,8 +126,8 @@ export function prepareQuoteParameters(rule, entry, input, pricingParameters = {
     for (const [name, p] of declared) {
         const search = searches.find(item => item.parameter === name);
         // A declared duration and duration_seconds have different meanings (smart duration).
-        // Video edit's duration=-1 is an operation setting, never expected output seconds.
-        const expectedEditDuration = name === 'duration_seconds' && entry.id === 'seedance-2.5-video-edit' && isSeedanceGeneration(entry);
+        // A Seedance 2.5 or 2.5 Flash video edit's duration=-1 is an operation setting, never expected output seconds.
+        const expectedEditDuration = name === 'duration_seconds' && isSeedanceEdit(entry);
         const generationNames = [name, ...(aliases[name] ?? []).filter(alias => !declared.has(alias) && !(expectedEditDuration && alias === 'duration'))];
         // A documented word for the rule's own default (Kling 4.0 edit duration "auto") prices as that default.
         const asRule = (value) => isRuleDefaultWord(model, name, value) ? p.default ?? value : value;

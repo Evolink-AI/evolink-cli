@@ -27,6 +27,7 @@ const outputSchema = {
 };
 const schema = {
     model: 'text', object: 'text', type: 'text', created: 'number', progress: 'number', duration: 'number', video_duration: 'number',
+    draft_expires_at: 'datetime', source_task_id: 'task_id',
     task_info: { can_cancel: 'boolean', estimated_time: 'number', video_duration: 'number' },
     usage: { billing_rule: 'text', credits_reserved: 'number', credits_used: 'number',
         cost: { credits: 'number', usd: 'number', cny: 'number' } },
@@ -46,6 +47,13 @@ function url(value) {
     }
     catch { /* Invalid optional URLs are omitted without fetching them. */ }
 }
+/** An RFC 3339 date-time with a time zone, as UTC without milliseconds; anything else is omitted. */
+function dateTime(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/.test(value))
+        return;
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z') : undefined;
+}
 function normalize(value, rule, path, warnings) {
     if (value === undefined)
         return;
@@ -56,6 +64,10 @@ function normalize(value, rule, path, warnings) {
         result = publicTaskMessage(value);
     else if (rule === 'id')
         result = publicIdentifier(value);
+    else if (rule === 'task_id')
+        result = taskIdentifier(value) ? value : undefined;
+    else if (rule === 'datetime')
+        result = dateTime(value);
     else if (rule === 'number')
         result = publicNumber(value);
     else if (rule === 'boolean')

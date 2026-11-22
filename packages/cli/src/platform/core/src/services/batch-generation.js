@@ -121,7 +121,7 @@ export async function submitBatch(config, options) {
             item.started = true;
             try {
                 item.receipt = await submitTask(config, { path: options.path, body: options.bodies[item.index], tool: options.tool,
-                    idempotencyKey: item.requestId, onAttemptError: error => item.attempts.push(error) });
+                    workflow: options.workflow, idempotencyKey: item.requestId, onAttemptError: error => item.attempts.push(error) });
             }
             catch (error) {
                 item.error = error;

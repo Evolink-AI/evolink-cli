@@ -17,7 +17,7 @@ const mutants = [
   ['seedance-input-fingerprint', 'src/media.mjs', '...(quote.effective_input ? { effective_input: quote.effective_input } : {}),', ''],
   ['seedance-submit-body', 'src/platform/core/src/tools/generate.js', 'const body = { ...effectiveInput, model: entry.id };', 'const body = { ...input, model: entry.id };'],
   ['seedance-unknown-search', 'src/platform/core/src/services/pricing-rules-estimate.js', 'missing.add(search.parameter)', 'missing.delete(search.parameter)'],
-  ['seedance-edit-duration', 'src/platform/core/src/services/pricing-quote-client.js', "const expectedEditDuration = name === 'duration_seconds' && entry.id === 'seedance-2.5-video-edit' && isSeedanceGeneration(entry)", 'const expectedEditDuration = false'],
+  ['seedance-edit-duration', 'src/platform/core/src/services/pricing-quote-client.js', "const expectedEditDuration = name === 'duration_seconds' && isSeedanceEdit(entry);", 'const expectedEditDuration = false;'],
   ['error-refusal-evidence', 'src/media.mjs', "&& ['not_submitted', 'rejected'].includes(e.details?.submission_state)", "&& true"],
 
   ['rest-capability', 'src/api.mjs', 'if (requireCapability)', 'if (false)'],
@@ -85,7 +85,7 @@ const mutants = [
   ['batch-never-resubmit', 'src/media.mjs', "if (line.startsWith('Never resubmit '))", 'if (false)'],
   ['batch-wait-refused', 'src/cli.mjs', "requireThat(!(options.wait && options['inputs-file']), 'invalid_option', BATCH_WAIT);", ''],
   ['batch-quote-wait-refused', 'src/cli.mjs', "if (options.wait) requireThat(!Array.isArray((await state.read('quotes', options.quote))?.args?.inputs), 'invalid_option', BATCH_WAIT);", ''],
-  ['direct-options-need-skip', 'src/cli.mjs', "requireThat(!DIRECT_OPTIONS.some(key => options[key] !== undefined), 'invalid_option',", 'requireThat(true,'],
+  ['direct-options-need-skip', 'src/cli.mjs', '!DIRECT_OPTIONS.some(key => options[key] !== undefined)', 'true'],
   ['batch-file-limit', 'src/cli.mjs', 'items.length >= 1 && items.length <= MAX_BATCH_ITEMS', 'items.length >= 1'],
   ['batch-jsonl', 'src/cli.mjs', 'raw.split(/\\r?\\n/).filter(line => line.trim())', '[raw]'],
   ['batch-one-line', 'src/cli.mjs', "if (items && typeof items === 'object' && !Array.isArray(items)) items = [items];", ''],
@@ -213,7 +213,7 @@ const mutants = [
   ['reference-cap-allowance', 'src/media.mjs', '!referenceBudgetExceeded(quote.pricing_quote.total_uc, cap)', '!rulesBudgetExceeded(quote.pricing_quote.total_uc, cap)'],
   ['reference-cap-refused', 'src/media.mjs', "const reference = quote.estimate?.status === 'token_billed' && Number.isFinite(quote.estimate.max_usd)", 'const reference = false && Number.isFinite(quote.estimate.max_usd)'],
   ['reference-range-unchecked', 'src/media.mjs', "quote.estimate?.status === 'token_billed' && quote.estimate.max_usd !== undefined", 'false'],
-  ['reference-status', 'src/platform/core/src/services/pricing-rules-estimate.js', "reserved?.gpt || reserved?.omni || reserved?.qwen ? 'token_billed' : 'estimated'", "reserved?.gpt || reserved?.omni || reserved?.qwen ? 'estimated' : 'estimated'"],
+  ['reference-status', 'src/platform/core/src/services/pricing-rules-estimate.js', "reserved?.gpt || reserved?.omni || reserved?.qwen || reserved?.minimax ? 'token_billed' : 'estimated'", "reserved?.gpt || reserved?.omni || reserved?.qwen || reserved?.minimax ? 'estimated' : 'estimated'"],
   ['reference-counts-hashed', 'src/platform/core/src/services/pricing-rules-estimate.js', '.filter(name => declared.has(name) && (/tokens$/.test(name) || svgAuthor(name))).sort() : [];', '.filter(() => false) : [];'],
   ['reference-zero-total', 'src/platform/core/src/services/pricing-rules-estimate.js', 'if (total === 0n) {', 'if (false) {'],
   ['reference-balance', 'src/platform/core/src/tools/estimate-cost.js', "(estimate.status === 'estimated' || estimate.status === 'token_billed') && estimate.max_credits !== undefined", "estimate.status === 'estimated' && estimate.max_credits !== undefined"],
@@ -244,6 +244,24 @@ const mutants = [
   // models pricing: signed in it reads the account's own rules; without a login it still reads the public ones.
   ['account-pricing-models-pricing-anonymous', 'src/api.mjs', 'access ? this.context(access, name, deadline) :', 'false ? this.context(access, name, deadline) :'],
   ['account-pricing-models-pricing-needs-login', 'src/api.mjs', 'catch (error) { if (this.signal?.aborted) throw error; }', 'catch (error) { throw error; }'],
+  // Workflow attribution: the run and step named with a quote travel with it and nowhere else; the two commands pass on what was asked.
+  ['attribution-quote-keeps-binding', 'src/media.mjs', 'const argsToSubmit = { ...input, ...(workflow ? { workflow } : {}), model: quote.model,', 'const argsToSubmit = { ...input, model: quote.model,'],
+  ['attribution-needs-run-and-step', 'src/cli.mjs', "/^wfr-[0-9a-f]{20}-[0-9a-f]{10}$/.test(options.run ?? '') && /^[a-z][a-z0-9_]{0,39}$/.test(options.step ?? '')", "/^wfr-[0-9a-f]{20}-[0-9a-f]{10}$/.test(options.run ?? '') || /^[a-z][a-z0-9_]{0,39}$/.test(options.step ?? '')"],
+  ['attribution-run-format', 'src/cli.mjs', "/^wfr-[0-9a-f]{20}-[0-9a-f]{10}$/.test(options.run ?? '')", 'Boolean(options.run)'],
+  ['attribution-step-format', 'src/cli.mjs', "/^[a-z][a-z0-9_]{0,39}$/.test(options.step ?? '')", 'Boolean(options.step)'],
+  ['attribution-fixed-with-quote', 'src/cli.mjs', 'requireThat(options.run === undefined && options.step === undefined && !DIRECT_OPTIONS.some(', 'requireThat(!DIRECT_OPTIONS.some('],
+  ['attribution-fixed-on-refresh', 'src/cli.mjs', "requireThat(!['run','step','model', 'input',", "requireThat(!['model', 'input',"],
+  ['attribution-direct-binding', 'src/cli.mjs', "return { model: options.model, ...body, ...(workflow ? { workflow } : {}),", 'return { model: options.model, ...body,'],
+  ['attribution-command-deliver-needs-run', 'src/cli.mjs', "requireThat(options.run, 'missing_option', 'Pass --run RUN_ID for the selected video.');", ''],
+  ['attribution-command-deliver-run', 'src/cli.mjs', "workflows.call('record_workflow_delivery', { run_id: options.run, task_id: id,", "workflows.call('record_workflow_delivery', { task_id: id,"],
+  ['attribution-command-deliver-previous', 'src/cli.mjs', "...(options['previous-task'] ? { previous_task_id: options['previous-task'] } : {}) });", '});'],
+  ['attribution-command-deliver-help', 'src/cli.mjs', '                                 Record the finished video a workflow run delivered (free)\n', ''],
+  ['attribution-command-task-id-read', 'src/workflow.mjs', "/^task-unified-[A-Za-z0-9-]{4,96}$/.test(videoUrl) ? { input_task_id: videoUrl }", "false ? { input_task_id: videoUrl }"],
+  ['attribution-command-task-id-whole', 'src/workflow.mjs', '/^task-unified-[A-Za-z0-9-]{4,96}$/.test(videoUrl)', '/task-unified-[A-Za-z0-9-]{4,96}/.test(videoUrl)'],
+  // A run's paid steps carry the call source mcp_workflow (shared code); ordinary generation carries none.
+  ['attribution-source-header', 'src/platform/core/src/services/api-client.js', "headers['X-EvoLink-Source'] = WORKFLOW_CALL_SOURCE;", ''],
+  ['attribution-source-everywhere', 'src/platform/core/src/services/api-client.js', 'if (options.workflow) {', "headers['X-EvoLink-Source'] = WORKFLOW_CALL_SOURCE; if (options.workflow) {"],
+  ['attribution-source-on-every-call', 'src/platform/core/src/services/http-policy.js', "'X-Evo-Tool': tool,", "'X-Evo-Tool': tool, 'X-EvoLink-Source': WORKFLOW_CALL_SOURCE,"],
 ];
 
 // Mutants of the update, login, local-wait and quote-refresh changes run only the test that covers them, which keeps the CI matrix fast.
@@ -277,6 +295,9 @@ const PATTERNS = {
     [['unknown-total-help', 'unknown-total-mapping', 'unknown-total-zero-amounts'], '^an estimate without its billing usage'],
     [['workflow-token-header', 'workflow-result-whole', 'workflow-run-forwarded', 'workflow-commands-shown'], '^workflow rules: one tools/call'],
     [['workflow-estimate-needs-plan'], '^workflow estimate: the planned output'],
+    [['attribution-quote-keeps-binding', 'attribution-needs-run-and-step', 'attribution-run-format', 'attribution-step-format', 'attribution-fixed-with-quote', 'attribution-fixed-on-refresh', 'attribution-direct-binding', 'attribution-source-header', 'attribution-source-everywhere'], '^workflow ownership travels with the quote'],
+    [['attribution-source-on-every-call'], '^real CLI processes: discovery'],
+    [['attribution-command-deliver-needs-run', 'attribution-command-deliver-run', 'attribution-command-deliver-previous', 'attribution-command-deliver-help', 'attribution-command-task-id-read', 'attribution-command-task-id-whole'], '^workflow deliver and a task ID'],
     [['workflow-target-forwarded', 'workflow-empty-target', 'workflow-target-size', 'workflow-analyze-needs-run'], '^video analyze: the read is passed on'],
     [['workflow-account-category', 'workflow-finer-code', 'workflow-cut-off-read-kept', 'workflow-unmarked-result'], '^a failed read exits non-zero'],
     [['workflow-renew-once', 'workflow-unknown-tool', 'workflow-refused-values', 'workflow-rate-limit-code', 'workflow-read-may-run'], '^a service without workflows'],
@@ -317,6 +338,8 @@ for (const [name, file, before, after] of selected) {
       : name.startsWith('mj-quote-') ? ['mj-pricing.test.mjs']
       : name.startsWith('unknown-total-') ? ['unknown-total.test.mjs']
       : name.startsWith('reference-') ? ['token-billed.test.mjs']
+      : name.startsWith('attribution-command-') ? ['workflow.test.mjs']
+      : name.startsWith('attribution-') ? ['e2e.test.mjs']
       : name.startsWith('workflow-') ? ['workflow.test.mjs']
       : name.startsWith('balance-short-') ? ['balance-shortfall.test.mjs']
       : name.startsWith('account-pricing-') ? ['account-pricing.test.mjs']

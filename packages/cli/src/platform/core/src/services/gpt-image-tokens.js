@@ -23,6 +23,22 @@ const TILES_1 = { low: [408, 400, 272], medium: [1584, 1568, 1056], high: [6240,
 export const INPUT_IMAGE_TOKENS = 1536;
 /** A 2.6 GIF's frames are drawn on one sheet, which is what is billed; size auto uses frames of this edge. */
 const GIF_AUTO_FRAME = 512, GIF_DEFAULT_FRAMES = 9;
+/**
+ * A 2.6 SVG is drawn as an image, then written as SVG by an author model, billed at that model's token rates. The gateway
+ * reserves this many of its input and output tokens on top of the image (controller/unified_images_gpt_image26.go), and the
+ * task settles at what the author model actually used.
+ */
+export const SVG_AUTHOR_INPUT_TOKENS = 2000, SVG_AUTHOR_OUTPUT_TOKENS = 8000;
+export const SVG_DEFAULT_AUTHOR = 'gpt-6.1-terra';
+/** The author models and the reasoning efforts each takes (gptImage26SVGModelEfforts). */
+const SVG_AUTHOR_EFFORTS = {
+    'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max'],
+    'gpt-6-sol': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    'gpt-6-luna': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    'gpt-6.1-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
+    'gpt-6.1-terra': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+};
+const SVG_AUTHORS = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra'];
 const family26 = (model) => model.trim().toLowerCase().startsWith('gpt-image-2.6');
 /** The 2.5 generation: 2.5 and 2.6 share qualities, tile bases and sizes. */
 const family25 = (model) => model.trim().toLowerCase().startsWith('gpt-image-2.5') || family26(model);
@@ -198,45 +214,63 @@ export function approximatePromptTokens(prompt) {
 const filled = (value) => typeof value === 'string' && value !== '';
 /** parseFlexibleStringArray: one string or a list; empty and non-string entries do not count. */
 const referenceCount = (value) => Array.isArray(value) ? value.filter(filled).length : filled(value) ? 1 : 0;
+/** Input images at the top level and in model_params, as gptImage26InputImageCount counts them. */
+const inputImages = (input, params) => referenceCount(input.image_url) + referenceCount(input.image_urls) + referenceCount(params.image_url) + referenceCount(params.image_urls);
+/** A model_params setting the gateway reads as a lower-cased, trimmed string; anything else reads as an empty one. */
+const setting = (value) => typeof value === 'string' ? value.trim().toLowerCase() : '';
 /**
- * The output settings the gateway refuses before it reserves anything, for gpt-image-2 and the 2.5 generation; true for
- * a GPT Image 2.6 GIF. The format and background are read as the gateway reads them: the top-level value, then
- * model_params, trimmed and lower-cased.
+ * The SVG author model and reasoning effort, checked as validateGPTImage26SVG does: an SVG is drawn from the prompt alone,
+ * the author defaults to gpt-6.1-terra and each author takes its own efforts.
  */
-function gifOutput(model, input, images) {
+function svgAuthorModel(model, input, params) {
+    if (inputImages(input, params))
+        invalid('image_urls', `output_format svg on ${model} draws from the prompt alone; remove image_urls.`, 'conflict');
+    const given = Object.hasOwn(params, 'svg_model') && params.svg_model !== undefined;
+    const author = given ? setting(params.svg_model) : SVG_DEFAULT_AUTHOR;
+    const efforts = SVG_AUTHOR_EFFORTS[author] ?? invalid('model_params.svg_model', `model_params.svg_model must be one of ${SVG_AUTHORS.join(', ')}.`, 'enum');
+    if (!Object.hasOwn(params, 'svg_reasoning_effort') || params.svg_reasoning_effort === undefined)
+        return { model: author };
+    const effort = setting(params.svg_reasoning_effort);
+    if (!efforts.includes(effort))
+        invalid('model_params.svg_reasoning_effort', `model_params.svg_reasoning_effort for ${author} must be one of ${efforts.join(', ')}.`, 'enum');
+    return { model: author, reasoning_effort: effort };
+}
+/**
+ * The output settings the gateway refuses before it reserves anything, for gpt-image-2 and the 2.5 generation; for a
+ * GPT Image 2.6 GIF or SVG, what it draws besides one image. The format and background are read as the gateway reads
+ * them: the top-level value, then model_params, trimmed and lower-cased.
+ */
+function specialOutput(model, input, images) {
     const params = nestedParams(input);
     const format = lower(input.output_format) || lower(params.output_format), background = lower(input.background) || lower(params.background);
     if (background === 'transparent' && (format === 'jpeg' || format === 'jpg'))
         invalid('background', `background transparent needs png or webp output; ${format} cannot keep transparency.`, 'conflict');
     if (!family26(model))
-        return false;
-    // SVG output is paused on the gateway, and its author model would be priced on top, so it is never quoted.
-    if (format === 'svg')
-        invalid('output_format', `output_format svg is not available on ${model}; use png, jpeg, webp or gif.`, 'enum');
-    if (['svg_model', 'svg_reasoning_effort'].some(key => Object.hasOwn(params, key)))
-        invalid('model_params', 'model_params.svg_model and svg_reasoning_effort need output_format svg, which is not available.', 'conflict');
-    if (format !== 'gif' && ['frame_count', 'frame_duration_ms'].some(key => Object.hasOwn(params, key)))
-        invalid('model_params', 'model_params.frame_count and frame_duration_ms need output_format gif.', 'conflict');
+        return undefined;
     const markup = [input.markup_url, params.markup_url].map(value => typeof value === 'string' ? value.trim() : '').find(Boolean);
     if (markup) {
-        if (!(referenceCount(input.image_url) + referenceCount(input.image_urls) + referenceCount(params.image_url) + referenceCount(params.image_urls))) {
+        if (!inputImages(input, params))
             invalid('markup_url', 'markup_url marks up the first reference image, so it needs image_urls.', 'required');
-        }
         if ([input.mask_url, params.mask_url].some(value => typeof value === 'string' && value.trim() !== ''))
             invalid('markup_url', 'markup_url cannot be combined with mask_url.', 'conflict');
     }
-    if (format !== 'gif')
-        return false;
+    if (format !== 'gif' && ['frame_count', 'frame_duration_ms'].some(key => Object.hasOwn(params, key)))
+        invalid('model_params', 'model_params.frame_count and frame_duration_ms need output_format gif.', 'conflict');
+    if (format !== 'svg' && ['svg_model', 'svg_reasoning_effort'].some(key => Object.hasOwn(params, key)))
+        invalid('model_params', 'model_params.svg_model and svg_reasoning_effort need output_format svg.', 'conflict');
+    if (format !== 'gif' && format !== 'svg')
+        return undefined;
     if (images > 1)
-        invalid('n', `output_format gif on ${model} needs n=1.`, 'conflict');
+        invalid('n', `output_format ${format} on ${model} needs n=1.`, 'conflict');
     if (background === 'transparent')
-        invalid('background', 'background transparent needs png or webp output, not gif.', 'conflict');
-    return true;
+        invalid('background', `background transparent needs png or webp output, not ${format}.`, 'conflict');
+    return format === 'gif' ? { gif: true } : { svg: svgAuthorModel(model, input, params) };
 }
 /**
  * The tokens the gateway reserves at submission for this input, as the reference price counts them. Without a size (or
  * with auto) gpt-image-2 and the 2.5 generation count a 2048×2048 output, and a 2.6 GIF counts 512×512 frames; quality
- * defaults to medium, high for gpt-image-1 and 1.5. A markup layer is not counted as a reference image.
+ * defaults to medium, high for gpt-image-1 and 1.5. A markup layer is not counted as a reference image. A 2.6 SVG counts
+ * its image as usual and, once, the author model's 2,000 input and 8,000 output tokens.
  * countPromptTokens replaces the approximation when the exact count is known.
  */
 export function tokenImageReservation(model, input, countPromptTokens = approximatePromptTokens) {
@@ -247,8 +281,9 @@ export function tokenImageReservation(model, input, countPromptTokens = approxim
         invalid('quality', `quality ${given} is not supported by ${model}.`, 'enum');
     const size = text('size', input.size), resolution = text('resolution', input.resolution);
     const auto = !family1(model) && ['', 'auto'].includes(size.trim().toLowerCase());
+    const special = family1(model) ? undefined : specialOutput(model, input, n);
     let output, outputTokens;
-    if (!family1(model) && gifOutput(model, input, n)) {
+    if (special?.gif) {
         const { tokens, width, height, ...gif } = gifSheet(model, size, gifFrames(nestedParams(input)), quality);
         output = { width, height, quality, size: auto ? 'auto' : 'pixels', gif };
         outputTokens = tokens;
@@ -262,5 +297,6 @@ export function tokenImageReservation(model, input, countPromptTokens = approxim
     const references = referenceCount(input.image_url) + referenceCount(input.image_urls) + (mask !== '' ? 1 : 0);
     const prompt = text('prompt', input.prompt);
     return { per_image: { image_output_tokens: outputTokens, text_input_tokens: prompt === '' ? 0 : countPromptTokens(prompt),
-            image_input_tokens: INPUT_IMAGE_TOKENS * references }, images: n, output, reference_images: references };
+            image_input_tokens: INPUT_IMAGE_TOKENS * references }, images: n, output, reference_images: references,
+        ...(special?.svg ? { svg_author: { ...special.svg, input_tokens: SVG_AUTHOR_INPUT_TOKENS, output_tokens: SVG_AUTHOR_OUTPUT_TOKENS } } : {}) };
 }

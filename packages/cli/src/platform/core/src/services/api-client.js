@@ -4,7 +4,7 @@ import { gatewayAuthHeaders } from '../config.js';
 import { currentRequestCredentials } from '../request-context.js';
 import { classifyGatewayError, formatGatewayError } from './error-handler.js';
 import { parseBatchTasks, parseTaskReceipt, parseTaskResponse } from './task-response.js';
-import { DEFAULT_READ_TIMEOUT_MS, DEFAULT_SUBMIT_TIMEOUT_MS, MAX_RETRY_DELAY_MS, MIN_READ_MS, PaidRequestOutcomeUnknownError, RequestTimeoutError, SubmissionNotStartedError, TaskQueryTimeoutError, evoHeaders, fetchWithTimeout, monotonicNow, newRunId, parseRetryAfter, readJsonBody, remainingMs, requestedRetryAfterMs, responseRequestId, timeoutFromEnv, } from './http-policy.js';
+import { DEFAULT_READ_TIMEOUT_MS, DEFAULT_SUBMIT_TIMEOUT_MS, MAX_RETRY_DELAY_MS, MIN_READ_MS, PaidRequestOutcomeUnknownError, RequestTimeoutError, SubmissionNotStartedError, TaskQueryTimeoutError, WORKFLOW_CALL_SOURCE, evoHeaders, fetchWithTimeout, monotonicNow, newRunId, parseRetryAfter, readJsonBody, remainingMs, requestedRetryAfterMs, responseRequestId, timeoutFromEnv, } from './http-policy.js';
 // --- Error class for HTTP-level failures ---
 export class ApiHttpError extends Error {
     status;
@@ -97,6 +97,11 @@ async function rawRequest(config, options) {
     let timeout;
     try {
         headers = { ...gatewayAuthHeaders(), Accept: 'application/json', ...evoHeaders(options.tool ?? 'unknown') };
+        if (options.workflow) {
+            headers['X-EvoLink-Workflow-Run'] = options.workflow.run_id;
+            headers['X-EvoLink-Workflow-Step'] = options.workflow.step;
+            headers['X-EvoLink-Source'] = WORKFLOW_CALL_SOURCE;
+        }
         if (options.body)
             headers['Content-Type'] = 'application/json';
         if (options.idempotencyKey) {
@@ -158,6 +163,8 @@ function verifiedPrechargeRejection(status, code) {
         'connection_not_found', 'connection_revoked', 'session_inactive', 'session_expired', 'mcp_scope_missing',
         'mcp_service_unauthorized', 'mcp_connection_required', 'mcp_route_not_allowed', 'mcp_token_invalid', 'user_disabled',
         'agent_session_unavailable', 'mcp_connection_create_failed', 'mcp_channel_disabled',
+        // The workflow binding of a submission is checked before idempotency, distribution and reservation.
+        'invalid_workflow',
     ]).has(code.toLowerCase());
 }
 /**
@@ -171,6 +178,7 @@ export async function submitTask(config, options) {
         method: 'POST',
         path: options.path,
         body: options.body,
+        workflow: options.workflow,
         tool: options.tool,
         idempotencyKey,
     }).catch((error) => { options.onAttemptError?.(error); throw error; }), 1, 500);

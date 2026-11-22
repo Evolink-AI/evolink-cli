@@ -203,6 +203,14 @@ export function describeTask(task, statusCheck = 'verified') {
         lines.push(`Took: ${task.duration} s`);
         structured.took_seconds = task.duration;
     }
+    if (status === 'completed' && task.draft_expires_at) {
+        lines.push(`Draft: it can be converted with seedance-2.5-draft-to-video until ${task.draft_expires_at}; after that it can no longer be converted.`);
+        structured.draft_expires_at = task.draft_expires_at;
+    }
+    if (task.source_task_id) {
+        lines.push(`Converted from draft task ${task.source_task_id}.`);
+        structured.source_task_id = task.source_task_id;
+    }
     if (status === 'failed' || status === 'cancelled') {
         const info = publicTaskError(task.error ?? { code: status === 'cancelled' ? 'request_cancelled' : 'unknown_error' });
         const billing = taskBilling(task);

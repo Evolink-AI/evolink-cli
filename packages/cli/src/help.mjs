@@ -28,6 +28,7 @@ const COMMANDS = {
     model: string('Required model ID'), input: string('JSON object; mutually exclusive with input-file and inputs-file'), 'input-file': string('Local JSON file; mutually exclusive with input and inputs-file'),
     'inputs-file': string('Local JSON array or JSONL file of 1-50 inputs for one model, estimated and later submitted together'), prompt: string('Optional prompt; not with inputs-file'),
     'pricing-source': choice(['account', 'public_reference']), 'pricing-parameters': string('JSON object containing declared billing usage'),
+    run: string('Workflow run to bind to this quote'), step: string('Generation step for this workflow run'),
     'refresh-quote': string('Refresh an unsubmitted saved quote with its existing input and budget'),
     'max-cost-usd': { type: 'number', exclusive_minimum: 0, maximum: 10000, description: 'Compatibility option for an explicit user budget: compare the estimate only; it does not cap the final charge' }, 'media-seconds': { type: 'number', exclusive_minimum: 0, maximum: 3600 },
   }],
@@ -47,6 +48,9 @@ const COMMANDS = {
     output: string('New file path, for a single result'), index: integer(1, 50, 1), all: flag, 'output-dir': string('Directory, required with all'),
     template: { ...string('Filename placeholders: {task_id}, {index}, {kind}, {ext}; no directories'), default: '{task_id}-{index}.{ext}' }, resume: flag,
   }],
+  'workflow deliver': ['TASK_ID --run RUN_ID [--previous-task TASK_ID]', 'Record the completed video selected for delivery. Free.', {
+    run: string('Workflow run ID'), 'previous-task': string('Current delivery task when replacing it'),
+  }],
   'workflow rules': ['NAME [options]', 'Read the step-by-step rules of an EvoLink workflow (for example ad-rebuild) from the signed-in service. The first call returns the overview, a run_id and the section list; pass --run on every later call so the whole run uses one version of the rules. Free.', {
     section: string('Section ID from an earlier answer; the overview when omitted'), run: string('run_id returned by the first call of this run'),
   }],
@@ -54,7 +58,7 @@ const COMMANDS = {
     run: string('run_id of this run'), seconds: integer(1, 600), keyframes: integer(1, 100), quality: choice(['480p', '720p', '1080p', '4k']),
     'aspect-ratio': choice(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']), 'creator-images': integer(0, 10, 0),
   }],
-  'video analyze': ['FILE_URL --run RUN_ID --step STEP --purpose PURPOSE [options]', 'Read a video for a workflow step. Paid, by tokens, to the signed-in account, and part of the workflow\'s estimated total: do not run it before the user confirmed that total. FILE_URL is an EvoLink file link (from evolink upload) or an EvoLink result link to an MP4 or MOV. The same command within 24 hours returns the first result without a new charge. A slow read returns an analysis_id for video analysis.', {
+  'video analyze': ['FILE_URL --run RUN_ID --step STEP --purpose PURPOSE [options]', 'Read a video for a workflow step. Paid, by tokens, to the signed-in account, and part of the workflow\'s estimated total: do not run it before the user confirmed that total. The video argument can be a completed EvoLink task ID. FILE_URL is an EvoLink file link (from evolink upload) or an EvoLink result link to an MP4 or MOV. The same command within 24 hours returns the first result without a new charge. A slow read returns an analysis_id for video analysis.', {
     run: string('Required run_id from workflow rules'), step: string('Required step name from the workflow rules, e.g. reference_analysis'),
     purpose: string('Required purpose named by the workflow rules, e.g. breakdown, sound, compare'),
     'target-file': string('Local text file with the target to compare the video against; only for a comparison'), attempt: integer(1, 3, 1),

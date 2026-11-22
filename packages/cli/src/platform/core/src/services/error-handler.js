@@ -283,7 +283,7 @@ export function classifyGatewayError(status, body, retryAfterMs, headerRequestId
     const error = envelope(body);
     const rawCode = text(error.code)?.toLowerCase();
     const knownCodes = new Set([...ACCOUNT_CODES, ...KEY_QUOTA_CODES, ...KEY_DAILY_CODES, ...CONTENT_CODES, ...UNAVAILABLE_CODES, ...CONNECTION_ENDED_CODES, ...SERVICE_CODES,
-        'mcp_paused', 'mcp_key_expired', 'mcp_channel_disabled', 'key_disabled', 'key_expired', 'key_model_not_allowed', 'idempotency_conflict', 'paid_outcome_unknown', 'agent_session_unavailable', 'mcp_connection_create_failed', 'mcp_token_invalid', 'user_disabled', 'upload_token_rate_limited', 'upload_token_unavailable', 'service_unavailable', 'invalid_token', 'internal_error', 'invalid_parameters', 'invalid_parameter', 'invalid_media_url', 'invalid_request', 'unsupported_parameters', 'estimate_unsupported', 'pricing_policy_not_found', 'pricing_unavailable', 'model_access_denied', 'ip_restricted']);
+        'mcp_paused', 'mcp_key_expired', 'mcp_channel_disabled', 'key_disabled', 'key_expired', 'key_model_not_allowed', 'idempotency_conflict', 'paid_outcome_unknown', 'agent_session_unavailable', 'mcp_connection_create_failed', 'mcp_token_invalid', 'user_disabled', 'invalid_workflow', 'upload_token_rate_limited', 'upload_token_unavailable', 'service_unavailable', 'invalid_token', 'internal_error', 'invalid_parameters', 'invalid_parameter', 'invalid_media_url', 'invalid_request', 'unsupported_parameters', 'estimate_unsupported', 'pricing_policy_not_found', 'pricing_unavailable', 'model_access_denied', 'ip_restricted']);
     const code = rawCode && knownCodes.has(rawCode) ? rawCode : undefined;
     const mode = currentCredentialMode();
     const mcpScope = text(error.limit_scope)?.toLowerCase() === 'mcp';
@@ -312,6 +312,9 @@ export function classifyGatewayError(status, body, retryAfterMs, headerRequestId
         message = 'The account quote is temporarily unavailable. Preserve the input and budget and retry later.';
     if (status === 415 && category === 'invalid_request')
         message = 'The request uses an unsupported file type or media format.';
+    // The run or step named with a workflow submission; the model's own parameters were not looked at yet.
+    if (code === 'invalid_workflow')
+        message = 'EvoLink did not accept the workflow run or step named with this submission.';
     const details = {};
     for (const field of DETAIL_FIELDS) {
         const value = error[field];
@@ -366,7 +369,9 @@ export function classifyGatewayError(status, body, retryAfterMs, headerRequestId
         request_id: requestId,
         details: Object.keys(details).length > 0 ? details : undefined,
     };
-    info.next_step = nextStep(category, info, mode);
+    info.next_step = code === 'invalid_workflow'
+        ? 'Pass the run_id of the current workflow run and one of its generation steps for this kind of media (get_media_workflow lists them). The same submission without the workflow binding is an ordinary generation.'
+        : nextStep(category, info, mode);
     return info;
 }
 /**

@@ -7,7 +7,10 @@ const proTier = (value) => typeof value === 'string' ? proTiers[value.trim().toU
 // service/multi_sku_billing_service.go seedDreamProOutputTierThresholdPixels. Every 1K and 1.5K ratio preset is
 // below it and every 2K preset above it, so a ratio follows quality.
 const SEEDREAM_PRO_2K_PIXELS = 2_610_000;
-/** controller preprocessSeedream5ProParams, then service ResolveSeedDreamProOutput. */
+/**
+ * controller preprocessSeedream5ProParams, then service ResolveSeedDreamProOutput. Seedream 5.5 takes the same steps and
+ * the same pixel threshold (controller/unified_images.go, its pre-billing beside 5.0 Pro's).
+ */
 function seedreamProTier(input) {
     const size = typeof input.size === 'string' ? input.size.trim() : '';
     if (size === '' || size === 'auto' || size.includes(':'))
@@ -18,6 +21,14 @@ function seedreamProTier(input) {
     const pixels = /^(\d+)\s*x\s*(\d+)$/.exec(size.toLowerCase().replace(/\u00d7/g, 'x'));
     return pixels && Number(pixels[1]) * Number(pixels[2]) > SEEDREAM_PRO_2K_PIXELS ? '2K' : '1K';
 }
+/**
+ * service/seedream_55.go EstimateSeedDream55LayerizePreBilling: a Seedream 5.5 layer split reserves one input image and
+ * n layers (2–100; 30 when n is not given, or 0 as NormalizeSeedDream55LayerizeMaxImages reads it), every layer at the
+ * 2K price, since how many it makes is known only afterwards.
+ */
+const SEEDREAM_55_DEFAULT_LAYERS = 30;
+const layerCount = (input) => input.n === undefined || input.n === null || input.n === 0
+    ? SEEDREAM_55_DEFAULT_LAYERS : input.n;
 /** service/minimax_h3_models.go MiniMaxH3CountInputImages: first frame, last frame and references all count. */
 function inputImageCount(input) {
     const filled = (value) => typeof value === 'string' && value.trim() !== '';
@@ -27,6 +38,11 @@ function inputImageCount(input) {
 const derived = {
     'doubao-seedream-5.0-pro output_images_2k': input => seedreamProTier(input) === '2K' ? 1 : 0,
     'doubao-seedream-5.0-pro output_images_standard': input => seedreamProTier(input) === '2K' ? 0 : 1,
+    'doubao-seedream-5.5 output_images_2k': input => seedreamProTier(input) === '2K' ? 1 : 0,
+    'doubao-seedream-5.5 output_images_standard': input => seedreamProTier(input) === '2K' ? 0 : 1,
+    'doubao-seedream-5.5-layerize input_images': () => 1,
+    'doubao-seedream-5.5-layerize output_images_2k': layerCount,
+    'doubao-seedream-5.5-layerize output_images_standard': () => 0,
     'minimax-h3-reference-to-video image_count': inputImageCount,
     'minimax-h3-max-reference-to-video image_count': inputImageCount,
     // service/tencent_video_upscale.go: the output keeps the source frame rate up to max_fps (120 when unset),

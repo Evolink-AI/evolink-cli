@@ -10,9 +10,10 @@ import { QuoteError, compareDecimal, isUsageParameter, prepareQuoteParameters, q
 import { prepareSeedanceInput } from './seedance-input.js';
 import { searchUsage } from './search-usage.js';
 import { CONSERVATIVE_QUOTE_PARAMETERS } from './pricing-derived.js';
-import { INPUT_IMAGE_TOKENS, isTokenImageModel, tokenImageReservation } from './gpt-image-tokens.js';
+import { INPUT_IMAGE_TOKENS, SVG_AUTHOR_INPUT_TOKENS, SVG_AUTHOR_OUTPUT_TOKENS, SVG_DEFAULT_AUTHOR, isTokenImageModel, tokenImageReservation } from './gpt-image-tokens.js';
 import { OMNI_IMAGE_TOKENS, OMNI_UNREAD_TIER, isOmniTokenModel, omniInputTiers, omniLowerInputTier, omniQuotedTier, omniReservation } from './omni-tokens.js';
 import { isQwenTTSModel, qwenTTSInput, qwenTTSReservation } from './qwen-tts-tokens.js';
+import { MINIMAX_ENHANCE_TEXT_TOKENS, MINIMAX_OUTPUT_TOKENS_4K, MINIMAX_OUTPUT_TOKENS_UP_TO_2K, MINIMAX_REFERENCE_IMAGE_TOKENS, isMiniMaxH3ImageModel, miniMaxH3ImageReservation } from './minimax-h3-image-tokens.js';
 /**
  * How long an approval from estimate_cost holds: 24 hours from the estimate. The rules' own `fresh_until`
  * is a short refresh window (minutes); people confirming a price in a chat may come back much
@@ -182,15 +183,49 @@ export function billingUsageHelp(rule, entry, scope = 'public_default') {
     const declared = new Set((rule.parameters ?? []).map(p => p.name));
     return helpLines([...declared].filter(name => isUsageParameter(entry.id, name)).sort(), entry, rule, declared, scope);
 }
-// GPT Image, Gemini Omni and Qwen TTS token models: the reference price counts the tokens the gateway reserves at
-// submission for the input.
+// GPT Image, Gemini Omni, Qwen TTS and MiniMax H3 Image token models: the reference price counts the tokens the gateway
+// reserves at submission for the input.
 const RESERVED_TOKENS = new Set(['image_input_tokens', 'image_cached_input_tokens', 'image_output_tokens',
     'text_input_tokens', 'text_cached_input_tokens', 'text_output_tokens']);
 const OMNI_TOKENS = new Set(['input_tokens', 'video_output_tokens', 'other_output_tokens']);
 const QWEN_TOKENS = new Set(['input_tokens', 'output_tokens']);
-/** GPT Image 2.6 rules also bill an SVG's author model. SVG output is not quoted, so a reference price uses none. */
+/** MiniMax H3 Image: each role's tokens. The gateway prices all three and refuses a model with any of them unpriced. */
+const MINIMAX_ROLES = { image_output: 'image_output_tokens', text_input: 'text_input_tokens', image_input: 'image_input_tokens' };
+/**
+ * GPT Image 2.6 rules also bill an SVG's author model (svg_model and its tokens): a request without SVG output uses none,
+ * and an SVG request the author model and the tokens EvoLink reserves for it.
+ */
 const NO_SVG_AUTHOR = { svg_model: 'none', svg_input_tokens: 0, svg_output_tokens: 0 };
 const svgAuthor = (name) => Object.hasOwn(NO_SVG_AUTHOR, name);
+/**
+ * The input without its SVG author: the reservation gives the author model as the gateway reads it (trimmed and
+ * lower-cased), so the spelling in the input is not checked against the rule again.
+ */
+function withoutSvgAuthor(input) {
+    const params = input.model_params;
+    if (!params || typeof params !== 'object' || Array.isArray(params) || !Object.hasOwn(params, 'svg_model'))
+        return input;
+    const { svg_model: _author, ...rest } = params;
+    return { ...input, model_params: rest };
+}
+function svgAuthorParameter(name, author) {
+    if (!author)
+        return NO_SVG_AUTHOR[name];
+    return name === 'svg_model' ? author.model : name === 'svg_input_tokens' ? author.input_tokens : author.output_tokens;
+}
+/**
+ * An SVG request is priced only by a rule that prices its author model: estimateGPTImage26SVGAuthorCost refuses a model
+ * without both of its roles (svg_input:<model>, svg_output:<model>) rather than reserve nothing for it.
+ */
+function checkSvgAuthorPriced(rule, model) {
+    const author = (rule.parameters ?? []).find(p => p.name === 'svg_model');
+    const tokens = ['svg_input_tokens', 'svg_output_tokens'];
+    const priced = (author?.values ?? author?.enum ?? []).includes(model) && tokens.every(name => (rule.parameters ?? []).some(p => p.name === name))
+        && [`svg_input:${model}`, `svg_output:${model}`].every((role, i) => rule.components.some(c => c.role === role
+            && c.pricing_status === 'available' && componentReads(c).has(tokens[i])));
+    if (!priced)
+        fail('pricing_rules_unavailable', `The published rules do not price the SVG author model ${model}.`);
+}
 /** Only a rule billed by these token counts alone, with an output component, can price the reservation. */
 function reservesTokens(rule, entry) {
     const id = entry.id.toLowerCase();
@@ -203,6 +238,10 @@ function reservesTokens(rule, entry) {
     if (isQwenTTSModel(id)) {
         return (rule.parameters ?? []).every(p => QWEN_TOKENS.has(p.name))
             && rule.components.some(c => c.role === 'output' && c.pricing_status === 'available' && componentReads(c).has('output_tokens'));
+    }
+    if (isMiniMaxH3ImageModel(id)) {
+        const tokens = new Set(Object.values(MINIMAX_ROLES));
+        return (rule.parameters ?? []).every(p => tokens.has(p.name)) && Object.entries(MINIMAX_ROLES).every(([role, name]) => rule.components.some(c => c.role === role && c.pricing_status === 'available' && componentReads(c).has(name)));
     }
     return isTokenImageModel(id)
         && (rule.parameters ?? []).every(p => RESERVED_TOKENS.has(p.name)
@@ -221,7 +260,13 @@ export function tokenReferenceHelp(rule, entry, scope = 'public_default') {
     if (isQwenTTSModel(entry.id)) {
         return `Billed by actual token usage. estimate_cost gives a reference price for the exact input: the tokens EvoLink reserves at submission for the text (after hot_fix.replace), an instruction or [tags] and hot_fix, at the published rates (${ratesOf(scope)}: ${rates.join('; ')}). It counts each character's worst case, so the task usually settles below it, at the tokens it actually uses.`;
     }
-    return `Billed by actual token usage. estimate_cost gives a reference price for the exact input: the tokens EvoLink reserves at submission for its size, quality, n, prompt and reference images, at the published rates (${ratesOf(scope)}: ${rates.join('; ')}). The task settles at the tokens it actually uses.`;
+    if (isMiniMaxH3ImageModel(entry.id)) {
+        return `Billed by actual token usage. estimate_cost gives a reference price for the exact input: the tokens EvoLink reserves at submission for each image, ${tokenText(MINIMAX_OUTPUT_TOKENS_UP_TO_2K)} output tokens up to 2K, ${tokenText(MINIMAX_OUTPUT_TOKENS_4K)} at 4K or one per 32×32 pixels of an explicit size, the prompt (plus ${tokenText(MINIMAX_ENHANCE_TEXT_TOKENS)} when it is enhanced) and ${tokenText(MINIMAX_REFERENCE_IMAGE_TOKENS)} per reference image, times n, at the published rates (${ratesOf(scope)}: ${rates.join('; ')}). The task settles at the tokens it actually uses.`;
+    }
+    // GPT Image 2.6: an SVG's author model is reserved on top of the image.
+    const svg = (rule.parameters ?? []).some(p => p.name === 'svg_model')
+        ? ` With output_format svg it adds what EvoLink reserves for the SVG author model (model_params.svg_model, default ${SVG_DEFAULT_AUTHOR}): ${tokenText(SVG_AUTHOR_INPUT_TOKENS)} input and ${tokenText(SVG_AUTHOR_OUTPUT_TOKENS)} output tokens at that model's published rates.` : '';
+    return `Billed by actual token usage. estimate_cost gives a reference price for the exact input: the tokens EvoLink reserves at submission for its size, quality, n, prompt and reference images, at the published rates (${ratesOf(scope)}: ${rates.join('; ')}).${svg} The task settles at the tokens it actually uses.`;
 }
 /** An Omni or Qwen TTS reservation's tokens as the rule's parameters. */
 const tokenParameters = (rule, tokens) => Object.fromEntries((rule.parameters ?? []).map(p => [p.name, tokens[p.name] ?? 0]));
@@ -246,18 +291,27 @@ function tokenReservation(rule, entry, input, countPromptTokens, mediaSeconds) {
         const usage = qwenTTSReservation(input);
         return { qwen: usage, parameters: tokenParameters(rule, usage.tokens) };
     }
+    if (isMiniMaxH3ImageModel(id)) {
+        const usage = miniMaxH3ImageReservation(input, countPromptTokens);
+        return { minimax: usage, parameters: tokenParameters(rule, usage.per_image) };
+    }
     const usage = tokenImageReservation(id, input, countPromptTokens);
+    if (usage.svg_author)
+        checkSvgAuthorPriced(rule, usage.svg_author.model);
     const parameters = {};
     for (const p of rule.parameters ?? []) {
-        parameters[p.name] = svgAuthor(p.name) ? NO_SVG_AUTHOR[p.name] : usage.per_image[p.name] ?? 0;
+        parameters[p.name] = svgAuthor(p.name) ? svgAuthorParameter(p.name, usage.svg_author)
+            : usage.per_image[p.name] ?? 0;
     }
     return { gpt: usage, parameters };
 }
 const CONFIRM_REFERENCE = 'Confirm this reference price before generation. It is billed by actual token usage: EvoLink reserves this amount at submission and settles the task at the tokens it actually uses, refunding or charging the difference when it finishes, so the final charge may be lower or slightly higher.';
 const ignoredNote = (ignored) => `pricing_parameters ${ignored.join(', ')} ${ignored.length > 1 ? 'are' : 'is'} not used for this model: the reference price comes from the generation input.`;
-function reservationNotes(usage, ignored) {
+function reservationNotes(usage, ignored, svgAuthorPart) {
     const notes = [CONFIRM_REFERENCE];
-    const gif = usage.output.gif;
+    const gif = usage.output.gif, author = usage.svg_author;
+    if (author && svgAuthorPart)
+        notes.push(`output_format is svg: the author model ${author.model} writes the SVG, and the reference includes ${svgAuthorPart.credits} credits (about $${svgAuthorPart.usd}) for it, the ${tokenText(author.input_tokens)} input and ${tokenText(author.output_tokens)} output tokens EvoLink reserves for it at submission. That part is also settled at the tokens the author model actually uses; its reasoning counts as output tokens, so a higher svg_reasoning_effort can cost more.`);
     if (gif)
         notes.push(`output_format is gif: the ${gif.frames} frames of ${gif.frame_width}×${gif.frame_height}${usage.output.size === 'auto' ? ' (size auto)' : ''} are drawn ${gif.columns}×${gif.rows} on one ${usage.output.width}×${usage.output.height} image, and the reference counts that image's output tokens.`);
     else if (usage.output.size === 'auto')
@@ -318,6 +372,30 @@ function qwenNotes(usage, ignored) {
         notes.push('An instruction or a [tag] in the text raises the reserved output tokens.');
     if (usage.hot_fix_characters)
         notes.push('The text is counted after hot_fix.replace, as it is synthesized; hot_fix itself also counts toward the input tokens.');
+    if (ignored.length > 0)
+        notes.push(ignoredNote(ignored));
+    return notes;
+}
+function minimaxBasis(usage) {
+    const t = usage.per_image, o = usage.output, plural = (count, word) => `${count} ${word}${count > 1 ? 's' : ''}`;
+    const output = o.size === 'pixels' ? `${o.width}×${o.height}` : `${o.resolution}${o.size === 'ratio' ? `, ${o.aspect_ratio}` : ', size auto'}`;
+    const text = `about ${tokenText(usage.prompt_tokens)} prompt tokens${usage.prompt_enhanced ? ` and ${tokenText(MINIMAX_ENHANCE_TEXT_TOKENS)} for prompt enhancement` : ''}`;
+    return `Reference price: published token rates applied to what EvoLink reserves at submission for this input. Per image: ${tokenText(t.image_output_tokens)} output tokens (${output}), ${tokenText(t.text_input_tokens)} text input tokens (${text})${t.image_input_tokens ? ` and ${tokenText(t.image_input_tokens)} image input tokens (${plural(usage.reference_images, 'reference image')})` : ''}, each part rounded up; ${plural(usage.images, 'image')}.`;
+}
+function minimaxNotes(usage, ignored) {
+    const notes = [CONFIRM_REFERENCE];
+    if (usage.reference_images) {
+        notes.push(`Editing with image_urls always enhances the prompt, which adds ${tokenText(MINIMAX_ENHANCE_TEXT_TOKENS)} text input tokens per image.`);
+        notes.push(`Each reference image counts ${tokenText(MINIMAX_REFERENCE_IMAGE_TOKENS)} input tokens, as EvoLink reserves without reading its size; a very wide or tall image can use more.`);
+    }
+    else if (usage.prompt_enhanced) {
+        notes.push(`prompt_extend is on (the default), which adds ${tokenText(MINIMAX_ENHANCE_TEXT_TOKENS)} text input tokens per image; with size as a ratio or WIDTHxHEIGHT it can be set to false.`);
+    }
+    if (usage.output.size === 'pixels')
+        notes.push(`An explicit size counts one output token per 32×32 pixels, at least ${tokenText(MINIMAX_OUTPUT_TOKENS_UP_TO_2K)}.`);
+    if (usage.images > 1)
+        notes.push(`n=${usage.images}: the reference covers ${usage.images} images; an image that fails (for example, a content check) is not billed.`);
+    notes.push('Prompt tokens are approximated; EvoLink counts them exactly at submission.');
     if (ignored.length > 0)
         notes.push(ignoredNote(ignored));
     return notes;
@@ -507,16 +585,16 @@ export function calculateRulesEstimate(body, entry, input, options = {}) {
     const effectiveInput = prepared.input;
     const declared = new Set((rule.parameters ?? []).map(p => p.name));
     const id = entry.id.toLowerCase();
-    // GPT Image, Gemini Omni and Qwen TTS token models never use token counts from pricing_parameters: the reference counts
+    // GPT Image, Gemini Omni, Qwen TTS and MiniMax H3 Image token models never use token counts from pricing_parameters: the reference counts
     // what the gateway reserves for this input. Leaving them out of the request hash lets a generation pass them or not.
-    const ignored = isTokenImageModel(id) || isOmniTokenModel(id) || isQwenTTSModel(id)
+    const ignored = isTokenImageModel(id) || isOmniTokenModel(id) || isQwenTTSModel(id) || isMiniMaxH3ImageModel(id)
         ? Object.keys(options.pricingParameters ?? {}).filter(name => declared.has(name) && (/tokens$/.test(name) || svgAuthor(name))).sort() : [];
     const pricingParameters = ignored.length
         ? Object.fromEntries(Object.entries(options.pricingParameters).filter(([name]) => !ignored.includes(name))) : options.pricingParameters;
     const reserved = reservation(rule, entry, effectiveInput, options.countPromptTokens, options.mediaSeconds);
-    const params = { ...prepareQuoteParameters(rule, entry, effectiveInput, pricingParameters, options.mediaSeconds, true), ...reserved?.parameters };
+    const params = { ...prepareQuoteParameters(rule, entry, reserved?.gpt ? withoutSvgAuthor(effectiveInput) : effectiveInput, pricingParameters, options.mediaSeconds, true), ...reserved?.parameters };
     // The gateway rounds each image's charge up separately, then reserves it once per image.
-    const images = BigInt(reserved?.gpt?.images ?? 1);
+    const images = BigInt(reserved?.gpt?.images ?? reserved?.minimax?.images ?? 1);
     const missing = new Set();
     // An Omni input video is billed by its length, which only media_seconds gives before submission.
     if (reserved?.needs)
@@ -562,11 +640,15 @@ export function calculateRulesEstimate(body, entry, input, options = {}) {
         request_hash: requestHash, total_uc: amounts.uc, expires_at: new Date(Date.now() + APPROVAL_TTL_MS).toISOString(),
         fingerprint: quoteRequestHash(entry.id, { rules: economicRules(rule), parameters: params,
             exchange_rate_version: body.meta.exchange_rate_version, components, missing: [...missing].sort(), total_uc: amounts.uc,
-            ...(reserved?.gpt || reserved?.omni || reserved?.qwen ? { reservation: reserved.gpt ?? reserved.omni ?? reserved.qwen } : {}) }) };
+            ...(reserved?.gpt || reserved?.omni || reserved?.qwen || reserved?.minimax ? { reservation: reserved.gpt ?? reserved.omni ?? reserved.qwen ?? reserved.minimax } : {}) }) };
     const status = missing.size ? components.length ? 'partial' : 'needs_input'
-        : reserved?.gpt || reserved?.omni || reserved?.qwen ? 'token_billed' : 'estimated';
+        : reserved?.gpt || reserved?.omni || reserved?.qwen || reserved?.minimax ? 'token_billed' : 'estimated';
     const missingUsage = [...missing].sort(), usageHelp = helpLines(missingUsage, entry, rule, declared, scope);
-    const usage = reserved?.gpt, omni = reserved?.omni, qwen = reserved?.qwen;
+    const usage = reserved?.gpt, omni = reserved?.omni, qwen = reserved?.qwen, minimax = reserved?.minimax;
+    // A GPT Image 2.6 SVG: what the author model's components add, for its note.
+    const authorComponents = new Set(rule.components.filter(c => /^svg_(?:input|output):/.test(c.role)).map(c => c.id));
+    const svgAuthorPart = usage?.svg_author ? amountsForUC(String(components.filter(c => authorComponents.has(c.id))
+        .reduce((sum, c) => sum + BigInt(c.subtotal_uc), 0n))) : undefined;
     // An Omni input video of unknown resolution counts the highest; the same input at each resolution EvoLink can read
     // it at, for the notes. lower_input keeps the one lower price 1.12.0 gave (720p; an upscale: the cheaper source).
     const tierPrices = [];
@@ -589,22 +671,25 @@ export function calculateRulesEstimate(body, entry, input, options = {}) {
             min_credits: Number(amounts.credits), max_credits: Number(amounts.credits) }),
         total_known: status === 'estimated',
         basis: [status === 'token_billed' && usage
-                ? `Reference price: published token rates applied to what EvoLink reserves at submission for this input. Per image: ${usage.per_image.image_output_tokens.toLocaleString('en-US')} output tokens (${usage.output.width}×${usage.output.height}${usage.output.gif ? `, ${usage.output.gif.frames} GIF frames` : ''}, quality ${usage.output.quality}), about ${usage.per_image.text_input_tokens.toLocaleString('en-US')} prompt tokens and ${usage.per_image.image_input_tokens.toLocaleString('en-US')} reference-image tokens, each part rounded up; ${usage.images} image${usage.images > 1 ? 's' : ''}.`
+                ? `Reference price: published token rates applied to what EvoLink reserves at submission for this input. Per image: ${usage.per_image.image_output_tokens.toLocaleString('en-US')} output tokens (${usage.output.width}×${usage.output.height}${usage.output.gif ? `, ${usage.output.gif.frames} GIF frames` : ''}, quality ${usage.output.quality}), about ${usage.per_image.text_input_tokens.toLocaleString('en-US')} prompt tokens and ${usage.per_image.image_input_tokens.toLocaleString('en-US')} reference-image tokens, each part rounded up; ${usage.images} image${usage.images > 1 ? 's' : ''}.${usage.svg_author ? ` SVG author model ${usage.svg_author.model}: ${tokenText(usage.svg_author.input_tokens)} input and ${tokenText(usage.svg_author.output_tokens)} output tokens, each part rounded up.` : ''}`
                 : status === 'token_billed' && omni ? omniBasis(omni)
                     : status === 'token_billed' && qwen ? qwenBasis(qwen)
-                        : 'Published full pricing rules evaluated for the supplied generation parameters; exact UC rounding and component minimums.'],
+                        : status === 'token_billed' && minimax ? minimaxBasis(minimax)
+                            : 'Published full pricing rules evaluated for the supplied generation parameters; exact UC rounding and component minimums.'],
         ...(missing.size ? { uncheckable_reason: 'usage', missing_usage: missingUsage, usage_help: usageHelp } : {}),
         ...(status === 'token_billed' && usage ? { reference_usage: usage } : {}),
         ...(status === 'token_billed' && omni ? { reference_usage: { ...omni, ...(lower ? { lower_input: { resolution: lower.tier, amounts: lower.amounts } } : {}),
                 ...(tierPrices.length ? { input_resolution_prices: tierPrices } : {}) } } : {}),
         ...(status === 'token_billed' && qwen ? { reference_usage: qwen } : {}),
+        ...(status === 'token_billed' && minimax ? { reference_usage: minimax } : {}),
         possible_extras: status === 'partial' ? usageHelp.map(line => `Additional charge depends on ${line}`) : [],
         notes: [scope === 'account' ? ACCOUNT_PRICES_NOTE : PUBLIC_PRICES_NOTE, ...status === 'needs_input'
                 ? ['No total is quoted until the missing usage is known, and generate_* will not submit before then.']
-                : status === 'token_billed' && usage ? reservationNotes(usage, ignored)
+                : status === 'token_billed' && usage ? reservationNotes(usage, ignored, svgAuthorPart)
                     : status === 'token_billed' && omni ? omniNotes(omni, ignored, tierPrices)
                         : status === 'token_billed' && qwen ? qwenNotes(qwen, ignored)
-                            : ['Confirm the estimated cost before generation. Actual billed usage and final charges may differ.']] };
+                            : status === 'token_billed' && minimax ? minimaxNotes(minimax, ignored)
+                                : ['Confirm the estimated cost before generation. Actual billed usage and final charges may differ.']] };
     if (zeroUsage.length)
         estimate.notes.push(`pricing_parameters ${zeroUsage.join(', ')} given as 0 would price this generation at 0. No media generation is free, so ${zeroUsage.length > 1 ? 'they count' : 'it counts'} as missing.`);
     if (ignored.length && status !== 'token_billed')

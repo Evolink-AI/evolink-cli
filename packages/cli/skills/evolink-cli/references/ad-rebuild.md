@@ -34,6 +34,8 @@ The rules name EvoLink tools. With the CLI, run these commands instead:
 | `get_video_analysis` | `evolink video analysis ANALYSIS_ID --json` |
 | `upload_file`, `prepare_upload` | `evolink upload /absolute/path --json` |
 | `search_models`, `get_model` | `evolink models search --query TEXT --json`, `evolink models show MODEL --json` |
+| `record_workflow_delivery` | Once a completed video is chosen for delivery, run `evolink workflow deliver TASK_ID --run RUN_ID --json`. |
+| `generate_workflow_media` | Bind each workflow generation with `evolink estimate --model MODEL --input-file FILE --run RUN_ID --step STEP --json`. Submit the approved quote with `evolink generate image\|video\|audio --quote ID --confirm --json`. Refresh and resume keep the original binding. |
 | `estimate_cost` | `evolink estimate --model MODEL --input-file FILE --json` |
 | `generate_image`, `generate_video`, `generate_audio` | `evolink generate image\|video\|audio --quote ID --confirm --json` |
 | `get_task`, `list_tasks` | `evolink tasks get\|wait\|list\|batch ... --json` |
@@ -77,3 +79,5 @@ For a comparison (`--purpose compare`), write the whole-ad target sheet and time
 - Do not invent logos, prices, statistics or product claims. Use only claims the user confirmed.
 - Some image and video models refuse inputs that look like real people. Report a refusal; never reword a prompt to get past review.
 - One creator and one product per run unless the user asks otherwise.
+
+For acceptance of an EvoLink video task, pass its task ID as the video argument to `evolink video analyze`. For an uploaded reference, pass the file link.

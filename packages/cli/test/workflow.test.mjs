@@ -363,6 +363,55 @@ test('a service without workflows, a refused login, a rate limit and an outage e
   assert.match(free.view.error.message, /Retry the command; it is free\./);
 });
 
+test('workflow deliver and a task ID for video analyze: the task and its run go to the service as given', async t => {
+  const { f, cli, calls } = await context(t);
+  f.responses.analyze_video = args => ({ status: 'completed', complete: true, analysis_id: ANALYSIS, run_id: args.run_id, step: args.step, purpose: args.purpose,
+    analysis: 'The video matches the plan.', charged: 'yes', _text: 'Video analysis (compare) for step delivery_check: complete.' });
+  const task = 'task-unified-1763712000-ab12cd34';
+  const read = await cli(['video', 'analyze', task, '--run', RUN, '--step', 'delivery_check', '--purpose', 'compare']);
+  assert.equal(read.code, 0, read.stdout);
+  assert.deepEqual(calls('analyze_video')[0].args, { run_id: RUN, step: 'delivery_check', purpose: 'compare', input_task_id: task });
+  // Only a whole task ID is a task: a link that contains one, a shorter ID and another kind of ID stay file links.
+  for (const [index, other] of [`https://files.evolink.ai/u/${task}.mp4`, 'task-unified-abc', 'unified-1763712000-ab12cd34'].entries()) {
+    await cli(['video', 'analyze', other, '--run', RUN, '--step', 'delivery_check', '--purpose', 'compare']);
+    assert.deepEqual(calls('analyze_video')[1 + index].args, { run_id: RUN, step: 'delivery_check', purpose: 'compare', video_url: other }, other);
+  }
+
+  f.responses.record_workflow_delivery = args => ({ run_id: args.run_id, delivered_task_id: args.task_id, _text: 'The delivered video was recorded.' });
+  const delivered = await cli(['workflow', 'deliver', task, '--run', RUN]);
+  assert.equal(delivered.code, 0, delivered.stdout);
+  assert.deepEqual(calls('record_workflow_delivery')[0].args, { run_id: RUN, task_id: task }, 'nothing is sent that was not asked for');
+  assert.deepEqual([delivered.view.ok, delivered.view.delivered_task_id], [true, task]);
+  const replacement = 'task-unified-1763712999-ef56ab78';
+  const replaced = await cli(['workflow', 'deliver', replacement, '--run', RUN, '--previous-task', task]);
+  assert.equal(replaced.code, 0, replaced.stdout);
+  assert.deepEqual(calls('record_workflow_delivery')[1].args, { run_id: RUN, task_id: replacement, previous_task_id: task });
+
+  const before = f.mcpHeaders.length;
+  for (const [args, code] of [
+    [[task], 'missing_option'],
+    [[task, '--previous-task', replacement], 'missing_option'],
+    [[task, '--run', RUN, '--step', 'final_video'], 'invalid_option'],
+    [['--run', RUN], 'unknown_command'],
+  ]) {
+    const refused = await cli(['workflow', 'deliver', ...args]);
+    assert.deepEqual([refused.code, refused.view.error.code], [1, code], args.join(' '));
+  }
+  assert.equal(f.mcpHeaders.length, before, 'a refused command sends nothing');
+
+  // A selection the service does not take comes back with the service's code and words, and exits non-zero.
+  f.responses.record_workflow_delivery = () => ({ error: { category: 'invalid_request', code: 'invalid_request', message: 'This task is not a completed video of this run.',
+    next_step: 'Pass a completed video task generated in this run.' } });
+  const refused = await cli(['workflow', 'deliver', task, '--run', RUN]);
+  assert.equal(refused.code, 1);
+  assert.equal(refused.view.error.message, 'This task is not a completed video of this run.');
+
+  const top = await cli(['--help'], { json: false });
+  assert.match(top.stdout, /workflow deliver TASK_ID --run RUN_ID \[--previous-task TASK_ID\]\n +Record the finished video a workflow run delivered \(free\)/);
+  const help = await cli(['workflow', 'deliver', '--help']);
+  assert.deepEqual([help.view.command, Object.keys(help.view.options)], ['workflow deliver', ['run', 'previous-task']]);
+});
+
 test('command shapes, help and the bundled skill agree on the workflow commands', async t => {
   const { f, home, cli } = await context(t);
   for (const args of [['workflow', 'rules'], ['workflow', 'estimate'], ['video', 'analyze'], ['video', 'analysis'], ['workflow'], ['video'], ['workflow', 'run', 'ad-rebuild']]) {
@@ -372,7 +421,7 @@ test('command shapes, help and the bundled skill agree on the workflow commands'
   assert.equal(f.mcpHeaders.length, 0);
 
   const group = await cli(['workflow', '--help']);
-  assert.deepEqual(group.view.subcommands, ['workflow rules', 'workflow estimate']);
+  assert.deepEqual(group.view.subcommands, ['workflow deliver', 'workflow rules', 'workflow estimate']);
   const analyze = await cli(['video', 'analyze', '--help']);
   assert.equal(analyze.view.command, 'video analyze');
   assert.deepEqual(Object.keys(analyze.view.options), ['run', 'step', 'purpose', 'target-file', 'attempt']);
@@ -384,7 +433,7 @@ test('command shapes, help and the bundled skill agree on the workflow commands'
   // Every command the mapping and the skill page name exists in this CLI.
   const page = await fs.readFile(fileURLToPath(new URL('../skills/evolink-cli/references/ad-rebuild.md', import.meta.url)), 'utf8');
   const named = new Set([...Object.values(WORKFLOW_COMMANDS), ...page.split('\n')].flatMap(line => [...line.matchAll(/evolink ((?:workflow|video) [a-z]+)/g)].map(match => match[1])));
-  assert.deepEqual([...named].sort(), ['video analysis', 'video analyze', 'workflow estimate', 'workflow rules']);
+  assert.deepEqual([...named].sort(), ['video analysis', 'video analyze', 'workflow deliver', 'workflow estimate', 'workflow rules']);
   for (const command of named) assert.equal(commandHelp(command.split(' ')).command, command);
   // The other commands the mapping names exist too, and the page's table has a row for every tool of the mapping.
   for (const [tools, command] of Object.entries(WORKFLOW_COMMANDS)) {
