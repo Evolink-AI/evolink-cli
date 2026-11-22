@@ -162,6 +162,8 @@ function verifiedPrechargeRejection(status, code) {
         'connection_not_found', 'connection_revoked', 'session_inactive', 'session_expired', 'mcp_scope_missing',
         'mcp_service_unauthorized', 'mcp_connection_required', 'mcp_route_not_allowed', 'mcp_token_invalid', 'user_disabled',
         'agent_session_unavailable', 'mcp_connection_create_failed', 'mcp_channel_disabled',
+        // The workflow binding of a submission is checked before idempotency, distribution and reservation.
+        'invalid_workflow',
     ]).has(code.toLowerCase());
 }
 /**

@@ -84,6 +84,7 @@ const HELP = `EvoLink CLI ${CLI_VERSION} (Node.js 22+)
   download TASK_ID --output FILE [--index N]
   download TASK_ID --all --output-dir DIR [--template NAME] [--resume]
   workflow deliver TASK_ID --run RUN_ID [--previous-task TASK_ID]
+                                 Record the finished video a workflow run delivered (free)
   workflow rules NAME [--section ID] [--run RUN_ID]
                                  Step-by-step rules of an EvoLink workflow (free)
   workflow estimate NAME --seconds N --keyframes N [--run RUN_ID]

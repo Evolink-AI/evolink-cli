@@ -148,8 +148,9 @@ export function registerGetModel(server, config) {
                     reference_inputs: referenceInputs(spec),
                 });
                 lines.push('Schemas are versioned official OpenAPI references. response_schema describes submission, not necessarily the final task output. Apply the additional runtime constraints above.');
+                // Seedance 2.5 Flash has no draft mode: its rules are the blocking checks alone.
                 if (modelRules)
-                    lines.push('Model-specific rules: draft=true uses quality=480p when omitted and rejects another quality. These rules apply only to this resolved model and generation endpoint.', ...(modelRules.search_usage ? [modelRules.search_usage] : []), ...(modelRules.duration_usage ? [modelRules.duration_usage] : []));
+                    lines.push(`Model-specific rules: ${modelRules.conditional_defaults ? 'draft=true uses quality=480p when omitted and rejects another quality' : modelRules.blocking.join('; ')}. These rules apply only to this resolved model and generation endpoint.`, ...(modelRules.search_usage ? [modelRules.search_usage] : []), ...(modelRules.duration_usage ? [modelRules.duration_usage] : []));
             }
             else {
                 lines.push('', 'Parameters for this model are not documented here; the gateway checks the input when you submit.');

@@ -6,7 +6,8 @@ export function searchUsage(entry, input) {
     const video = entry.kind === 'video' && entry.spec?.path === '/v1/videos/generations';
     const seedream = image && entry.id === 'doubao-seedream-5.0-lite';
     const gemini = image && ['gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview', 'gemini-nano-banana-2.1'].includes(entry.id ?? '');
-    const seedance = video && ['seedance-2.0-text-to-video', 'seedance-2.0-fast-text-to-video', 'seedance-2.5-text-to-video'].includes(entry.id ?? '');
+    const seedance = video && ['seedance-2.0-text-to-video', 'seedance-2.0-fast-text-to-video', 'seedance-2.5-text-to-video',
+        'seedance-2.5-flash-text-to-video'].includes(entry.id ?? '');
     if (!seedream && !gemini && !seedance)
         return [];
     const params = input.model_params && typeof input.model_params === 'object' && !Array.isArray(input.model_params)

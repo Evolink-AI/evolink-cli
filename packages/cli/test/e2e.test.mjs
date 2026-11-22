@@ -190,4 +190,26 @@ test('workflow ownership travels with the quote across CLI processes, refresh, d
   assert.ok(direct.view.task_id);
   assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).workflowRun, run);
   assert.notEqual((await cli(f, home, ['estimate', ...input, '--run', run])).code, 0);
+
+  // The binding is fixed when the quote is made: an approved quote and a refresh take no run or step of their own.
+  const submitted = f.calls.filter(c => c.name === 'generate_video').length;
+  const bound = (await cli(f, home, ['estimate', ...input, ...scope])).view.quote_id;
+  assert.ok(bound);
+  for (const args of [['generate', 'video', '--quote', bound, '--confirm', ...scope], ['generate', 'video', '--quote', bound, '--confirm', '--step', 'keyframe'],
+    ['estimate', '--refresh-quote', bound, ...scope], ['estimate', '--refresh-quote', bound, '--run', run], ['estimate', '--refresh-quote', bound, '--step', 'keyframe']]) {
+    const refused = await cli(f, home, args);
+    assert.deepEqual([refused.code, refused.view.error?.code], [1, 'invalid_option'], args.join(' '));
+  }
+  // A run ID or a step name that cannot be one is refused before anything is priced, saved or submitted.
+  for (const bad of [['--run', 'wfr-123', '--step', 'final_video'], ['--run', run, '--step', 'Final Video'], ['--step', 'final_video'], ['--run', run.toUpperCase(), '--step', 'final_video']]) {
+    for (const command of [['estimate'], ['generate', 'video', '--skip-estimate']]) {
+      const refused = await cli(f, home, [...command, ...input, ...bad]);
+      assert.deepEqual([refused.code, refused.view.error?.code], [1, 'invalid_workflow'], [...command, ...bad].join(' '));
+    }
+  }
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').length, submitted, 'a refused command submits nothing');
+  // The quote made above is still the one that was approved, with its binding.
+  const kept = await cli(f, home, ['generate', 'video', '--quote', bound, '--confirm']);
+  assert.ok(kept.view.task_id, JSON.stringify(kept.view));
+  assert.deepEqual([f.calls.filter(c => c.name === 'generate_video').at(-1).workflowRun, f.calls.filter(c => c.name === 'generate_video').at(-1).workflowStep], [run, 'final_video']);
 });

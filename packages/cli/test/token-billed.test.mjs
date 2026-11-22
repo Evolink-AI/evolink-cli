@@ -103,7 +103,7 @@ test('the real CLI saves a reference-price quote and submits only the generation
   }
 });
 
-test('the real CLI quotes a GPT Image 2.6 GIF by its sheet and saves no quote for what the gateway refuses', async t => {
+test('the real CLI quotes a GPT Image 2.6 GIF by its sheet and an SVG with its author model, and saves no quote for what the gateway refuses', async t => {
   const f = await fixture(t), model = 'gpt-image-2.6-flare', input = { prompt: PROMPT, output_format: 'gif', model_params: { frame_count: 4 } };
   const quoted = await f.run(['estimate', '--model', model, '--input', JSON.stringify(input)]);
   assert.equal(quoted.status, 0, JSON.stringify(quoted)); const view = quoted.data;
@@ -111,7 +111,15 @@ test('the real CLI quotes a GPT Image 2.6 GIF by its sheet and saves no quote fo
   assert.deepEqual(view.estimate.reference_usage.output.gif, { frames: 4, frame_width: 512, frame_height: 512, columns: 4, rows: 2 });
   const generated = await f.run(['generate', 'image', '--quote', view.quote_id, '--confirm']);
   assert.equal(generated.status, 0, JSON.stringify(generated)); assert.deepEqual(f.submissions, [{ ...input, model }]);
-  for (const refused of [{ prompt: PROMPT, output_format: 'svg' }, { prompt: PROMPT, output_format: 'gif', n: 2 }, { prompt: PROMPT, output_format: 'gif', size: '1:1' },
+  // An SVG is quoted as the image plus what EvoLink reserves for the model that writes it (the default author here).
+  const drawn = { prompt: PROMPT, output_format: 'svg' };
+  const svg = await f.run(['estimate', '--model', model, '--input', JSON.stringify(drawn)]);
+  assert.equal(svg.status, 0, JSON.stringify(svg)); assert.ok(svg.data.quote_id);
+  assert.equal(svg.data.estimate.status, 'token_billed'); assert.deepEqual(svg.data.amounts, reference(model, drawn).amounts);
+  assert.deepEqual(svg.data.estimate.reference_usage.svg_author, { model: 'gpt-6.1-terra', input_tokens: 2000, output_tokens: 8000 });
+  assert.ok(BigInt(svg.data.amounts.uc) > BigInt(reference(model, { prompt: PROMPT }).amounts.uc), 'the author model adds to the price of the image');
+  for (const refused of [{ prompt: PROMPT, output_format: 'svg', n: 2 }, { prompt: PROMPT, output_format: 'svg', image_urls: ['https://files.example/a.png'] },
+    { prompt: PROMPT, output_format: 'svg', model_params: { svg_model: 'gpt-5' } }, { prompt: PROMPT, output_format: 'gif', n: 2 }, { prompt: PROMPT, output_format: 'gif', size: '1:1' },
     { prompt: PROMPT, markup_url: 'https://files.example/markup.png' }, { prompt: PROMPT, background: 'transparent', output_format: 'jpeg' }]) {
     const result = await f.run(['estimate', '--model', model, '--input', JSON.stringify(refused)]);
     assert.notEqual(result.status, 0, JSON.stringify(refused)); assert.equal(result.data.quote_id, undefined, JSON.stringify(refused));
