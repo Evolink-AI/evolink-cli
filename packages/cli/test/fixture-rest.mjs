@@ -104,7 +104,7 @@ export async function restFixture(state, req, res, url, body, send) {
     const data = JSON.parse(body); const idempotency = req.headers['idempotency-key'];
     const type = { images: 'image', videos: 'video', audios: 'audio' }[url.pathname.split('/')[2]];
     const args = { model: data.model, input: Object.fromEntries(Object.entries(data).filter(([key]) => key !== 'model')), client_request_id: idempotency };
-    state.calls.push({ name: `generate_${type}`, args }); await state.beforeSubmit?.(args);
+    state.calls.push({ name: `generate_${type}`, args, workflowRun: req.headers['x-evolink-workflow-run'], workflowStep: req.headers['x-evolink-workflow-step'] }); await state.beforeSubmit?.(args);
     const replayed = state.paid.has(idempotency);
     if (!replayed) {
       const id = randomUUID(); state.paid.set(idempotency, id);

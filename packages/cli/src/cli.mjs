@@ -83,6 +83,7 @@ const HELP = `EvoLink CLI ${CLI_VERSION} (Node.js 22+)
   uploads get ID                 Read a saved upload receipt (free)
   download TASK_ID --output FILE [--index N]
   download TASK_ID --all --output-dir DIR [--template NAME] [--resume]
+  workflow deliver TASK_ID --run RUN_ID [--previous-task TASK_ID]
   workflow rules NAME [--section ID] [--run RUN_ID]
                                  Step-by-step rules of an EvoLink workflow (free)
   workflow estimate NAME --seconds N --keyframes N [--run RUN_ID]
@@ -135,7 +136,7 @@ Ctrl-C stops local waiting; submitted tasks continue on EvoLink.
 // setup, doctor and auth login report the update status in their own result; auth status stays offline.
 const NO_UPDATE_NOTICE = new Set(['setup', 'doctor', 'auth login', 'auth status']);
 
-const OPTIONS = Object.fromEntries(['server', 'api-url', 'files-url', 'query', 'type', 'limit', 'model', 'modality', 'view', 'product-id', 'operation', 'lifecycle', 'input', 'input-file', 'inputs-file', 'prompt', 'media-seconds',
+const OPTIONS = Object.fromEntries(['server', 'api-url', 'files-url', 'previous-task', 'query', 'type', 'limit', 'model', 'modality', 'view', 'product-id', 'operation', 'lifecycle', 'input', 'input-file', 'inputs-file', 'prompt', 'media-seconds',
   'pricing-source', 'pricing-parameters', 'refresh-quote', 'max-cost-usd', 'quote', 'timeout', 'status', 'since', 'until', 'page', 'ids', 'references', 'max-pages', 'output', 'output-dir', 'template', 'index', 'upload-path', 'agent',
   'section', 'run', 'seconds', 'keyframes', 'quality', 'aspect-ratio', 'creator-images', 'step', 'purpose', 'target-file', 'attempt'].map(k => [k, { type: 'string' }]));
 for (const k of ['json', 'token-stdin', 'no-browser', 'replace-modified', 'confirm', 'skip-estimate', 'wait', 'all', 'resume', 'help', 'version']) OPTIONS[k] = { type: 'boolean' };
@@ -156,13 +157,13 @@ export function validateCommand(args, options) {
     'models pricing': [2, 'model', 'modality', 'view', 'product-id', 'operation', 'lifecycle'],
     'models recommend': [2, 'type', 'query', 'references', 'limit'], 'docs search': [2, 'query', 'type', 'limit'],
     usage: [1, 'since', 'until', 'type', 'model', 'max-pages'],
-    estimate: [1, 'model', 'input', 'input-file', 'inputs-file', 'prompt', 'media-seconds', 'max-cost-usd', 'pricing-source', 'pricing-parameters', 'refresh-quote'],
+    estimate: [1, 'run', 'step', 'model', 'input', 'input-file', 'inputs-file', 'prompt', 'media-seconds', 'max-cost-usd', 'pricing-source', 'pricing-parameters', 'refresh-quote'],
     ...Object.fromEntries(['image', 'video', 'audio'].map(type => [`generate ${type}`, [2, 'quote', 'confirm', 'wait', 'timeout',
-      'skip-estimate', 'model', 'input', 'input-file', 'inputs-file', 'prompt', 'media-seconds', 'pricing-parameters', 'max-cost-usd']])),
+      'skip-estimate', 'run', 'step', 'model', 'input', 'input-file', 'inputs-file', 'prompt', 'media-seconds', 'pricing-parameters', 'max-cost-usd']])),
     'tasks get': [3], 'tasks wait': [3, 'timeout'], 'tasks batch': [2, 'ids'], 'tasks list': [2, 'type', 'status', 'since', 'until', 'model', 'page', 'limit'], 'tasks resume': [2, 'quote'],
     upload: [2, 'upload-path'], 'uploads get': [3], download: [2, 'output', 'index', 'all', 'output-dir', 'template', 'resume'],
     'skills install': [2, 'agent', 'replace-modified'], 'skills status': [2, 'agent'], doctor: [1, 'agent'],
-    'workflow rules': [3, 'section', 'run'], 'workflow estimate': [3, 'run', 'seconds', 'keyframes', 'quality', 'aspect-ratio', 'creator-images'],
+    'workflow deliver': [3, 'run', 'previous-task'], 'workflow rules': [3, 'section', 'run'], 'workflow estimate': [3, 'run', 'seconds', 'keyframes', 'quality', 'aspect-ratio', 'creator-images'],
     'video analyze': [3, 'run', 'step', 'purpose', 'target-file', 'attempt'], 'video analysis': [3],
   };
   const route = routes[`${command} ${action}`] || routes[command];
@@ -188,7 +189,7 @@ export function validateCommand(args, options) {
         '--skip-estimate submits without a quote, only when the user explicitly said not to estimate or confirm; --quote and --confirm are for an approved quote.');
       requireThat(!(options.wait && options['inputs-file']), 'invalid_option', BATCH_WAIT);
     } else {
-      requireThat(!DIRECT_OPTIONS.some(key => options[key] !== undefined), 'invalid_option',
+      requireThat(options.run === undefined && options.step === undefined && !DIRECT_OPTIONS.some(key => options[key] !== undefined), 'invalid_option',
         'Generation submits the saved quote as approved; change its input with a new estimate. These options are only for --skip-estimate.');
     }
   }
@@ -268,7 +269,13 @@ async function estimateArgs(options) {
   requireThat(options['pricing-source'] === undefined || ['pricing_rules', 'account', 'public_reference'].includes(options['pricing-source']), 'invalid_option', 'pricing-source must be pricing_rules (account/public_reference remain compatibility aliases).');
   const media = number(options['media-seconds'], 'media-seconds', Number.MIN_VALUE, 3600);
   const cap = number(options['max-cost-usd'], 'max-cost-usd', Number.MIN_VALUE, 10_000);
-  return { model: options.model, ...body, ...(pricingParameters !== undefined ? { pricing_parameters: pricingParameters } : {}), ...(options['pricing-source'] ? { pricing_source: options['pricing-source'] } : {}), ...(media !== undefined ? { media_seconds: media } : {}), ...(cap !== undefined ? { max_cost_usd: cap } : {}) };
+  let workflow;
+  if (options.run !== undefined || options.step !== undefined) {
+    requireThat(/^wfr-[0-9a-f]{20}-[0-9a-f]{10}$/.test(options.run ?? '') && /^[a-z][a-z0-9_]{0,39}$/.test(options.step ?? ''),
+      'invalid_workflow', 'Pass both --run RUN_ID and --step STEP from the workflow.');
+    workflow = { run_id: options.run, step: options.step };
+  }
+  return { model: options.model, ...body, ...(workflow ? { workflow } : {}), ...(pricingParameters !== undefined ? { pricing_parameters: pricingParameters } : {}), ...(options['pricing-source'] ? { pricing_source: options['pricing-source'] } : {}), ...(media !== undefined ? { media_seconds: media } : {}), ...(cap !== undefined ? { max_cost_usd: cap } : {}) };
 }
 
 export async function dispatch(positionals, options, { state, server, credentials, client, mcp = client, workflows, signal, progress, skillHome, updates, budget }) {
@@ -310,7 +317,7 @@ export async function dispatch(positionals, options, { state, server, credential
     max_pages: number(options['max-pages'], 'max-pages', 1, 20, true) || 5 }, { requireCapability: true });
   if (command === 'estimate') {
     if (options['refresh-quote']) {
-      requireThat(!['model', 'input', 'input-file', 'prompt', 'media-seconds', 'max-cost-usd', 'pricing-source', 'pricing-parameters'].some(key => options[key] !== undefined),
+      requireThat(!['run','step','model', 'input', 'input-file', 'prompt', 'media-seconds', 'max-cost-usd', 'pricing-source', 'pricing-parameters'].some(key => options[key] !== undefined),
         'invalid_option', 'refresh-quote reuses the saved input and budget; do not combine it with new estimate parameters.');
       return media.refresh(options['refresh-quote']);
     }
@@ -360,6 +367,10 @@ export async function dispatch(positionals, options, { state, server, credential
     noBrowser: options['no-browser'], timeout: options.timeout === undefined ? undefined : Number(options.timeout) * 1000, signal, progress, update });
   if (command === 'doctor') return doctor({ state, server, credentials, client, agent: options.agent, skillHome, update });
   if ((command === 'workflow' || command === 'video') && workflows) {
+    if (command === 'workflow' && action === 'deliver') {
+      requireThat(options.run, 'missing_option', 'Pass --run RUN_ID for the selected video.');
+      return workflows.call('record_workflow_delivery', { run_id: options.run, task_id: id, ...(options['previous-task'] ? { previous_task_id: options['previous-task'] } : {}) });
+    }
     if (command === 'workflow' && action === 'rules') return workflows.rules(id, { section: options.section, run: options.run });
     if (command === 'workflow' && action === 'estimate') {
       requireThat(options.seconds !== undefined && options.keyframes !== undefined, 'missing_option', 'Pass --seconds and --keyframes: the planned video length and the expected number of keyframe images.');

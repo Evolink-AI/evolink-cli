@@ -164,3 +164,30 @@ test('skill installation uses bundled content and protects another skill', async
   await assert.rejects(installSkill({ home: protectedHome }), { code: 'skill_conflict' });
   assert.ok((await fs.readFile(installed.path, 'utf8')).endsWith('previous version'));
 });
+
+test('workflow ownership travels with the quote across CLI processes, refresh, direct submission and replay', async t => {
+  const { f, home } = await context(t);
+  const run = 'wfr-0123456789abcdef0000-aabbccddee';
+  const scope = ['--run', run, '--step', 'final_video'];
+  const input = ['--model', 'fixture-video', '--input', '{"prompt":"one video"}'];
+  const quote = await cli(f, home, ['estimate', ...input, ...scope]);
+  assert.equal(quote.code, 0, JSON.stringify(quote.view));
+  const refreshed = await cli(f, home, ['estimate', '--refresh-quote', quote.view.quote_id]);
+  const id = refreshed.view.quote_id;
+  assert.ok(id, JSON.stringify(refreshed.view));
+  const made = await cli(f, home, ['generate', 'video', '--quote', id, '--confirm']);
+  assert.ok(made.view.task_id, JSON.stringify(made.view));
+  let calls = f.calls.filter(c => c.name === 'generate_video');
+  assert.equal(calls.at(-1).workflowRun, run); assert.equal(calls.at(-1).workflowStep, 'final_video');
+  assert.equal(calls.at(-1).args.input?.workflow, undefined);
+  const recovered = await cli(f, home, ['tasks', 'resume', '--quote', id]);
+  assert.equal(recovered.view.task_id, made.view.task_id);
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').length, calls.length);
+  const ordinary = await cli(f, home, ['generate', 'video', '--skip-estimate', ...input]);
+  assert.ok(ordinary.view.task_id);
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).workflowRun, undefined);
+  const direct = await cli(f, home, ['generate', 'video', '--skip-estimate', ...input, ...scope]);
+  assert.ok(direct.view.task_id);
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).workflowRun, run);
+  assert.notEqual((await cli(f, home, ['estimate', ...input, '--run', run])).code, 0);
+});

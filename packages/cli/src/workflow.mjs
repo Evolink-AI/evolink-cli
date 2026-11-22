@@ -16,6 +16,8 @@ export const WORKFLOW_COMMANDS = Object.freeze({
   get_video_analysis: 'evolink video analysis ANALYSIS_ID --json',
   'upload_file, prepare_upload': 'evolink upload FILE --json',
   'search_models, get_model': 'evolink models search|show ... --json',
+  record_workflow_delivery: 'evolink workflow deliver TASK_ID --run RUN_ID [--previous-task TASK_ID] --json',
+  generate_workflow_media: 'evolink estimate --model MODEL --input-file FILE --run RUN_ID --step STEP --json (then submit this quote with evolink generate image|video|audio --quote ID --confirm --json)',
   estimate_cost: 'evolink estimate --model MODEL --input-file FILE --json',
   'generate_image, generate_video, generate_audio': 'evolink generate image|video|audio --quote ID --confirm --json',
   'get_task, list_tasks': 'evolink tasks get|wait|list|batch ... --json',
@@ -128,7 +130,7 @@ export class Workflows {
       target = await localFile(() => fs.readFile(targetFile, 'utf8'), { file: targetFile });
       requireThat(target.trim(), 'invalid_input', 'The target file is empty.');
     }
-    return this.call('analyze_video', { run_id: run, step, purpose, video_url: videoUrl,
+    return this.call('analyze_video', { run_id: run, step, purpose, ...(/^task-unified-[A-Za-z0-9-]{4,96}$/.test(videoUrl) ? { input_task_id: videoUrl } : { video_url: videoUrl }),
       ...(target !== undefined ? { target } : {}), ...(attempt !== undefined ? { attempt } : {}) });
   }
 

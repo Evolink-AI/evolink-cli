@@ -97,6 +97,10 @@ async function rawRequest(config, options) {
     let timeout;
     try {
         headers = { ...gatewayAuthHeaders(), Accept: 'application/json', ...evoHeaders(options.tool ?? 'unknown') };
+        if (options.workflow) {
+            headers['X-EvoLink-Workflow-Run'] = options.workflow.run_id;
+            headers['X-EvoLink-Workflow-Step'] = options.workflow.step;
+        }
         if (options.body)
             headers['Content-Type'] = 'application/json';
         if (options.idempotencyKey) {
@@ -171,6 +175,7 @@ export async function submitTask(config, options) {
         method: 'POST',
         path: options.path,
         body: options.body,
+        workflow: options.workflow,
         tool: options.tool,
         idempotencyKey,
     }).catch((error) => { options.onAttemptError?.(error); throw error; }), 1, 500);

@@ -201,7 +201,7 @@ export class Media {
   }
   /** Obtains and checks an estimate and builds its quote record; nothing is saved. */
   async prepareQuote(args) {
-    const { max_cost_usd, ...input } = args;
+    const { max_cost_usd, workflow, ...input } = args;
     let quote;
     try {
       quote = await this.client.call('estimate_cost', input);
@@ -211,7 +211,7 @@ export class Media {
     } catch (error) { throw quoteError(error, max_cost_usd); }
     // Keep an explicit user budget; an estimate does not create a spending cap.
     const id = randomUUID();
-    const argsToSubmit = { ...input, model: quote.model, ...(quote.pricing_quote ? { pricing_quote: quote.pricing_quote } : {}), ...(quote.account_quote ? { account_quote: quote.account_quote } : {}), ...(max_cost_usd !== undefined ? { max_cost_usd } : {}) };
+    const argsToSubmit = { ...input, ...(workflow ? { workflow } : {}), model: quote.model, ...(quote.pricing_quote ? { pricing_quote: quote.pricing_quote } : {}), ...(quote.account_quote ? { account_quote: quote.account_quote } : {}), ...(max_cost_usd !== undefined ? { max_cost_usd } : {}) };
     const serverExpiry = quote.pricing_quote ? Date.parse(quote.pricing_quote.expires_at) : quote.account_quote ? Date.parse(quote.account_quote.quote.expires_at) : undefined;
     requireThat(serverExpiry === undefined || Number.isFinite(serverExpiry) && serverExpiry > this.now(),
       'quote_expired', 'The estimate expired before it could be saved. Request another estimate.');
@@ -340,7 +340,7 @@ export class Media {
         'This request ID was first submitted more than 23 hours ago. EvoLink keeps a request ID for 24 hours, so replaying it now could create and charge a new task. Check recent tasks with evolink tasks list --since 2d instead.',
         { quote_id: id, client_request_id: quote.client_request_id, submission_allowed: false, ...dashboardCheck() });
       if (!quote.skip_estimate && this.now() >= quote.expires_at) throw expiredQuote(quote, id, resume);
-      const { max_cost_usd, account_quote, pricing_quote, skip_estimate, ...checkArgs } = quote.args;
+      const { max_cost_usd, account_quote, pricing_quote, skip_estimate, workflow, ...checkArgs } = quote.args;
       // skip_estimate: the user opted out of estimates; the shared core still refuses invalid input and an unpriceable budget.
       if (!quote.skip_estimate) {
         let fresh;

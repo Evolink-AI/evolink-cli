@@ -372,7 +372,7 @@ test('command shapes, help and the bundled skill agree on the workflow commands'
   assert.equal(f.mcpHeaders.length, 0);
 
   const group = await cli(['workflow', '--help']);
-  assert.deepEqual(group.view.subcommands, ['workflow rules', 'workflow estimate']);
+  assert.deepEqual(group.view.subcommands, ['workflow deliver', 'workflow rules', 'workflow estimate']);
   const analyze = await cli(['video', 'analyze', '--help']);
   assert.equal(analyze.view.command, 'video analyze');
   assert.deepEqual(Object.keys(analyze.view.options), ['run', 'step', 'purpose', 'target-file', 'attempt']);
@@ -384,7 +384,7 @@ test('command shapes, help and the bundled skill agree on the workflow commands'
   // Every command the mapping and the skill page name exists in this CLI.
   const page = await fs.readFile(fileURLToPath(new URL('../skills/evolink-cli/references/ad-rebuild.md', import.meta.url)), 'utf8');
   const named = new Set([...Object.values(WORKFLOW_COMMANDS), ...page.split('\n')].flatMap(line => [...line.matchAll(/evolink ((?:workflow|video) [a-z]+)/g)].map(match => match[1])));
-  assert.deepEqual([...named].sort(), ['video analysis', 'video analyze', 'workflow estimate', 'workflow rules']);
+  assert.deepEqual([...named].sort(), ['video analysis', 'video analyze', 'workflow deliver', 'workflow estimate', 'workflow rules']);
   for (const command of named) assert.equal(commandHelp(command.split(' ')).command, command);
   // The other commands the mapping names exist too, and the page's table has a row for every tool of the mapping.
   for (const [tools, command] of Object.entries(WORKFLOW_COMMANDS)) {
