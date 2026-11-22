@@ -85,7 +85,7 @@ const mutants = [
   ['batch-never-resubmit', 'src/media.mjs', "if (line.startsWith('Never resubmit '))", 'if (false)'],
   ['batch-wait-refused', 'src/cli.mjs', "requireThat(!(options.wait && options['inputs-file']), 'invalid_option', BATCH_WAIT);", ''],
   ['batch-quote-wait-refused', 'src/cli.mjs', "if (options.wait) requireThat(!Array.isArray((await state.read('quotes', options.quote))?.args?.inputs), 'invalid_option', BATCH_WAIT);", ''],
-  ['direct-options-need-skip', 'src/cli.mjs', "requireThat(!DIRECT_OPTIONS.some(key => options[key] !== undefined), 'invalid_option',", 'requireThat(true,'],
+  ['direct-options-need-skip', 'src/cli.mjs', '!DIRECT_OPTIONS.some(key => options[key] !== undefined)', 'true'],
   ['batch-file-limit', 'src/cli.mjs', 'items.length >= 1 && items.length <= MAX_BATCH_ITEMS', 'items.length >= 1'],
   ['batch-jsonl', 'src/cli.mjs', 'raw.split(/\\r?\\n/).filter(line => line.trim())', '[raw]'],
   ['batch-one-line', 'src/cli.mjs', "if (items && typeof items === 'object' && !Array.isArray(items)) items = [items];", ''],
