@@ -4,7 +4,7 @@ import { gatewayAuthHeaders } from '../config.js';
 import { currentRequestCredentials } from '../request-context.js';
 import { classifyGatewayError, formatGatewayError } from './error-handler.js';
 import { parseBatchTasks, parseTaskReceipt, parseTaskResponse } from './task-response.js';
-import { DEFAULT_READ_TIMEOUT_MS, DEFAULT_SUBMIT_TIMEOUT_MS, MAX_RETRY_DELAY_MS, MIN_READ_MS, PaidRequestOutcomeUnknownError, RequestTimeoutError, SubmissionNotStartedError, TaskQueryTimeoutError, evoHeaders, fetchWithTimeout, monotonicNow, newRunId, parseRetryAfter, readJsonBody, remainingMs, requestedRetryAfterMs, responseRequestId, timeoutFromEnv, } from './http-policy.js';
+import { DEFAULT_READ_TIMEOUT_MS, DEFAULT_SUBMIT_TIMEOUT_MS, MAX_RETRY_DELAY_MS, MIN_READ_MS, PaidRequestOutcomeUnknownError, RequestTimeoutError, SubmissionNotStartedError, TaskQueryTimeoutError, WORKFLOW_CALL_SOURCE, evoHeaders, fetchWithTimeout, monotonicNow, newRunId, parseRetryAfter, readJsonBody, remainingMs, requestedRetryAfterMs, responseRequestId, timeoutFromEnv, } from './http-policy.js';
 // --- Error class for HTTP-level failures ---
 export class ApiHttpError extends Error {
     status;
@@ -100,6 +100,7 @@ async function rawRequest(config, options) {
         if (options.workflow) {
             headers['X-EvoLink-Workflow-Run'] = options.workflow.run_id;
             headers['X-EvoLink-Workflow-Step'] = options.workflow.step;
+            headers['X-EvoLink-Source'] = WORKFLOW_CALL_SOURCE;
         }
         if (options.body)
             headers['Content-Type'] = 'application/json';

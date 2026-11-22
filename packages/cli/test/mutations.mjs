@@ -258,6 +258,10 @@ const mutants = [
   ['attribution-command-deliver-help', 'src/cli.mjs', '                                 Record the finished video a workflow run delivered (free)\n', ''],
   ['attribution-command-task-id-read', 'src/workflow.mjs', "/^task-unified-[A-Za-z0-9-]{4,96}$/.test(videoUrl) ? { input_task_id: videoUrl }", "false ? { input_task_id: videoUrl }"],
   ['attribution-command-task-id-whole', 'src/workflow.mjs', '/^task-unified-[A-Za-z0-9-]{4,96}$/.test(videoUrl)', '/task-unified-[A-Za-z0-9-]{4,96}/.test(videoUrl)'],
+  // A run's paid steps carry the call source mcp_workflow (shared code); ordinary generation carries none.
+  ['attribution-source-header', 'src/platform/core/src/services/api-client.js', "headers['X-EvoLink-Source'] = WORKFLOW_CALL_SOURCE;", ''],
+  ['attribution-source-everywhere', 'src/platform/core/src/services/api-client.js', 'if (options.workflow) {', "headers['X-EvoLink-Source'] = WORKFLOW_CALL_SOURCE; if (options.workflow) {"],
+  ['attribution-source-on-every-call', 'src/platform/core/src/services/http-policy.js', "'X-Evo-Tool': tool,", "'X-Evo-Tool': tool, 'X-EvoLink-Source': WORKFLOW_CALL_SOURCE,"],
 ];
 
 // Mutants of the update, login, local-wait and quote-refresh changes run only the test that covers them, which keeps the CI matrix fast.
@@ -291,7 +295,8 @@ const PATTERNS = {
     [['unknown-total-help', 'unknown-total-mapping', 'unknown-total-zero-amounts'], '^an estimate without its billing usage'],
     [['workflow-token-header', 'workflow-result-whole', 'workflow-run-forwarded', 'workflow-commands-shown'], '^workflow rules: one tools/call'],
     [['workflow-estimate-needs-plan'], '^workflow estimate: the planned output'],
-    [['attribution-quote-keeps-binding', 'attribution-needs-run-and-step', 'attribution-run-format', 'attribution-step-format', 'attribution-fixed-with-quote', 'attribution-fixed-on-refresh', 'attribution-direct-binding'], '^workflow ownership travels with the quote'],
+    [['attribution-quote-keeps-binding', 'attribution-needs-run-and-step', 'attribution-run-format', 'attribution-step-format', 'attribution-fixed-with-quote', 'attribution-fixed-on-refresh', 'attribution-direct-binding', 'attribution-source-header', 'attribution-source-everywhere'], '^workflow ownership travels with the quote'],
+    [['attribution-source-on-every-call'], '^real CLI processes: discovery'],
     [['attribution-command-deliver-needs-run', 'attribution-command-deliver-run', 'attribution-command-deliver-previous', 'attribution-command-deliver-help', 'attribution-command-task-id-read', 'attribution-command-task-id-whole'], '^workflow deliver and a task ID'],
     [['workflow-target-forwarded', 'workflow-empty-target', 'workflow-target-size', 'workflow-analyze-needs-run'], '^video analyze: the read is passed on'],
     [['workflow-account-category', 'workflow-finer-code', 'workflow-cut-off-read-kept', 'workflow-unmarked-result'], '^a failed read exits non-zero'],

@@ -60,6 +60,24 @@ test('real CLI processes: discovery, quote, approval, generation, result and ori
   const list = await cli(f, home, ['tasks', 'list', '--since', '30m']); assert.equal(list.view.tasks.length, 3);
   assert.equal(f.downloads.length, 3);
   assert.ok(f.downloads.every(h => !h.authorization && !h.cookie && h['user-agent'].startsWith('EvoLinkCLI/')));
+
+  // Ordinary commands carry no call source (only a workflow run's paid steps do): balance, models, estimates, single and
+  // batch generation, task reads.
+  const inputs = path.join(home, 'inputs.json');
+  await fs.writeFile(inputs, JSON.stringify([{ prompt: 'batch one' }, { prompt: 'batch two' }]));
+  for (const kind of ['image', 'video']) {
+    const batch = await cli(f, home, ['generate', kind, '--model', `fixture-${kind}`, '--inputs-file', inputs, '--skip-estimate']);
+    assert.equal(batch.code, 0, JSON.stringify(batch.view));
+  }
+  assert.equal((await cli(f, home, ['tasks', 'get', list.view.tasks[0].task_id])).code, 0);
+  assert.equal((await cli(f, home, ['tasks', 'batch', '--ids', list.view.tasks.map(task => task.task_id).join(',')])).code, 0);
+  const seen = f.restCalls.map(call => `${call.method} ${call.path}`);
+  for (const route of ['GET /v1/credits', 'POST /v1/images/generations', 'POST /v1/videos/generations', 'GET /v1/tasks', 'POST /v1/tasks/batch', `GET /v1/tasks/${list.view.tasks[0].task_id}`]) {
+    assert.ok(seen.includes(route), `${route} was called: ${JSON.stringify([...new Set(seen)])}`);
+  }
+  assert.ok(seen.some(route => route.includes('pricing')), 'the estimates read prices');
+  assert.equal(seen.filter(route => route.endsWith('/generations')).length, 7, 'three quoted and four batched submissions');
+  assert.deepEqual(f.restCalls.filter(call => call.headers['x-evolink-source'] !== undefined).map(call => `${call.method} ${call.path}`), []);
 });
 
 test('lost paid reply: persisted journal and replay recover exactly one task', async t => {
@@ -179,6 +197,8 @@ test('workflow ownership travels with the quote across CLI processes, refresh, d
   assert.ok(made.view.task_id, JSON.stringify(made.view));
   let calls = f.calls.filter(c => c.name === 'generate_video');
   assert.equal(calls.at(-1).workflowRun, run); assert.equal(calls.at(-1).workflowStep, 'final_video');
+  // A run's paid step says where it comes from; the gateway records it on the task and its logs.
+  assert.equal(calls.at(-1).source, 'mcp_workflow');
   assert.equal(calls.at(-1).args.input?.workflow, undefined);
   const recovered = await cli(f, home, ['tasks', 'resume', '--quote', id]);
   assert.equal(recovered.view.task_id, made.view.task_id);
@@ -186,9 +206,11 @@ test('workflow ownership travels with the quote across CLI processes, refresh, d
   const ordinary = await cli(f, home, ['generate', 'video', '--skip-estimate', ...input]);
   assert.ok(ordinary.view.task_id);
   assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).workflowRun, undefined);
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).source, undefined, 'ordinary generation carries no source');
   const direct = await cli(f, home, ['generate', 'video', '--skip-estimate', ...input, ...scope]);
   assert.ok(direct.view.task_id);
   assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).workflowRun, run);
+  assert.equal(f.calls.filter(c => c.name === 'generate_video').at(-1).source, 'mcp_workflow');
   assert.notEqual((await cli(f, home, ['estimate', ...input, '--run', run])).code, 0);
 
   // The binding is fixed when the quote is made: an approved quote and a refresh take no run or step of their own.

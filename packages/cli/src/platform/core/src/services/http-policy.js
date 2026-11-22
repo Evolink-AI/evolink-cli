@@ -9,6 +9,12 @@ export const DEFAULT_WRITE_TIMEOUT_MS = 120_000;
 /** A generation submit only queues a task; keep it well inside the ~60 s tool-call limit of Codex and Cursor. */
 export const DEFAULT_SUBMIT_TIMEOUT_MS = 30_000;
 export const MAX_RETRY_DELAY_MS = 30_000;
+/**
+ * X-EvoLink-Source of what a workflow does on the gateway: its paid submissions (a run and a step named) and its
+ * video reads. The gateway records it on the task and on the log, so these calls can be told apart from the other
+ * MCP and CLI calls of the account. Ordinary generation carries no source.
+ */
+export const WORKFLOW_CALL_SOURCE = 'mcp_workflow';
 /** Public site for console links in errors and results. */
 export const EVOLINK_SITE = 'https://evolink.ai';
 export const DASHBOARD_URL = `${EVOLINK_SITE}/dashboard`;
