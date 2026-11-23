@@ -2,7 +2,7 @@
   "schema_version": 1,
   "repository": "Evolink-AI/evolink-mcp",
   "baseline": "acc9fd43b945e3917b47809fc94f85ba26c7c8db",
-  "source_sha256": "ca4b63e9e7e2c012bcbc3a8d730883711ec0f2249d7f0fe8a750371bc56394fb",
+  "source_sha256": "040b62e00f865be823b3c10b3d648567bc965d2ee67b51ffca3dbf69267485a6",
   "files": {
     "packages/core/src/branding.ts": "534b944a1370f210a3858c1a85b1a23071aca8e26b7a3e70e4d859ba5b152ff7",
     "packages/core/src/config.ts": "85e1f33f5a6f0c298d3acabbf50a3c328cc50152fd2da0b029ed033aa819b874",
@@ -60,7 +60,7 @@
     "packages/core/src/tools/task-format.ts": "01afab7d231168faad2b482ba258f6a8ba0c33a652f182b72130f629302cf33e",
     "packages/core/src/tools/task-usage.ts": "ba05d054e1d60d67f6ab75cc6d9169f453c87e0e89c17a2c1be5fc429e8f9f47",
     "packages/core/src/tools/upload-file.ts": "5f17a57c3ee26a27ccdb025ef5f0d9d331e094b627892bd44cbe56c23ff58e08",
-    "packages/core/src/version.ts": "41443fa6687d94c639dcf1e1f05b703b075367a8f4a349b418f33b71d7ba176d"
+    "packages/core/src/version.ts": "73816204fbe0e369df57ef5dd151825bae42ebed7b1228ea824304277904fac9"
   },
   "artifacts": {
     "core/src/config.js": "e5f001e6bb30fa3ca49ca1383b3deb83ea495d20079adefad6d0451f5bbee0e3",
@@ -111,6 +111,6 @@
     "core/src/tools/task-billing.js": "f49b252afcaf4a6275f5db6ebc8e6380387b2406bd5fc91e7367e3523025af8b",
     "core/src/tools/task-format.js": "168ffbca88b1468da81dbfa4dfc71757e9237d1519f79463b7b3bfae2ef248a1",
     "core/src/tools/task-usage.js": "3aae5d7807efc2c762bf604cf9ecfecf8f9008185bcef584e6d4243404418dc5",
-    "core/src/version.js": "6450ae6ae7f4ae564a943f1b04f690fc95a351105a4750b9e11868b7fba7a0c1"
+    "core/src/version.js": "4f90d593869b1af27ac63eb0c6a50df7b8c0b7ae6fca730bc5c419d71806b135"
   }
 }
