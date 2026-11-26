@@ -60,7 +60,7 @@ For a comparison (`--purpose compare`), write the whole-ad target sheet and time
 ## Cost: one estimate, one confirmation
 
 - Before the user confirms, do only free work: login and balance, the reference's duration and aspect ratio, frames and shot count, rules and prices. `workflow rules` and `workflow estimate` are free. `video analyze` is paid.
-- Present the one estimated total from `workflow estimate` and what it covers, and ask once. The total depends mostly on the length and resolution of the video. If the user named no resolution, estimate with `--quality 720p` and list the other choices after that total; when the user picks one of them, run `workflow estimate` again with it (free) and present that single total instead. Charges are then made step by step as the work runs.
+- Present the one estimated total from `workflow estimate` and what it covers, and ask once. The total depends mostly on the length and resolution of the video. If the user named no resolution, estimate with `--quality 720p` and list the other choices after that total; when the user picks one of them, run `workflow estimate` again with it (free) and present that single total instead. Charges are then made step by step as the work runs: steps finished before a stop or a failure stay charged.
 - That confirmation is the approval for the quotes inside the total: after it, estimate each generation and submit it with `--confirm` without asking again, as long as the running total stays within the estimate.
 - Ask again only when the total would be exceeded, when a decision is the user's, when the finished ad needs a new attempt, or, on the draft route, once the draft is delivered: then ask whether to convert it to 1080p or 4K. Estimate and confirm each conversion on its own; it is not part of the total, so the confirmation above does not cover it.
 - If the client can show a question with answers to pick, ask through it: the suggested answer first, and room for the user to type a different one. Otherwise ask in one short message.
@@ -69,7 +69,7 @@ For a comparison (`--purpose compare`), write the whole-ad target sheet and time
 ## If something stops the run
 
 - **Balance too low.** Nothing is charged for the refused step. Give the top-up link from the error. After the user tops up, continue from the same step; finished steps are reused.
-- **A generation fails.** It is not charged. Retry at most twice for a temporary failure, then stop and explain.
+- **A generation fails.** That generation is not charged; the steps finished before it stay charged. Retry at most twice for a temporary failure. Then stop and tell the user that the ad is not finished, what has been charged so far, and that they can continue from the failed step later without paying again for the finished steps.
 - **A video read fails.** Follow the next step in the error. Repeat exactly the same command when it says so: a finished read is returned without a new charge. Add `--attempt 2` only when the error says to raise the attempt.
 - **The terminal or the conversation restarts.** Fetch the rules again with the same `--run`, and look for submitted tasks with `evolink tasks list --json` before submitting anything again. Result links and uploads stay available for 7 days.
 
