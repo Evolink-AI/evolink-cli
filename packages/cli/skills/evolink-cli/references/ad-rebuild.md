@@ -71,7 +71,7 @@ For a comparison (`--purpose compare`), write the whole-ad target sheet and time
 - **Balance too low.** Nothing is charged for the refused step. Give the top-up link from the error. After the user tops up, continue from the same step; finished steps are reused.
 - **A generation fails.** That generation is not charged; the steps finished before it stay charged. Retry at most twice for a temporary failure. Then stop and tell the user that the ad is not finished, what has been charged so far, and that they can continue from the failed step later without paying again for the finished steps.
 - **A video read fails.** Follow the next step in the error. Repeat exactly the same command when it says so: a finished read is returned without a new charge. Add `--attempt 2` only when the error says to raise the attempt.
-- **The terminal or the conversation restarts.** Fetch the rules again with the same `--run`, and look for submitted tasks with `evolink tasks list --json` before submitting anything again. Result links and uploads stay available for 7 days.
+- **The terminal or the conversation restarts.** Fetch the rules again with the same `--run`, and look for submitted tasks with `evolink tasks list --json` before submitting anything again. Result links stay available for 7 days; uploaded files are valid for 72 hours.
 
 ## Rights and limits
 
